@@ -1,0 +1,60 @@
+// Embedded profession icons (numeric IDs).
+//   1..9       = core professions (prof 1..9)
+//   10..45     = elite specs: id = 10 + (prof-1)*4 + (spec-1)
+// Example: Guardian e103 = 10 + 0*4 + 2 = 12
+//          Thief    e501 = 10 + 4*4 + 0 = 26
+
+ 1 RCDATA "../specs/001.png"
+ 2 RCDATA "../specs/002.png"
+ 3 RCDATA "../specs/003.png"
+ 4 RCDATA "../specs/004.png"
+ 5 RCDATA "../specs/005.png"
+ 6 RCDATA "../specs/006.png"
+ 7 RCDATA "../specs/007.png"
+ 8 RCDATA "../specs/008.png"
+ 9 RCDATA "../specs/009.png"
+
+10 RCDATA "../specs/e101.png"
+11 RCDATA "../specs/e102.png"
+12 RCDATA "../specs/e103.png"
+13 RCDATA "../specs/e104.png"
+
+14 RCDATA "../specs/e201.png"
+15 RCDATA "../specs/e202.png"
+16 RCDATA "../specs/e203.png"
+17 RCDATA "../specs/e204.png"
+
+18 RCDATA "../specs/e301.png"
+19 RCDATA "../specs/e302.png"
+20 RCDATA "../specs/e303.png"
+21 RCDATA "../specs/e304.png"
+
+22 RCDATA "../specs/e401.png"
+23 RCDATA "../specs/e402.png"
+24 RCDATA "../specs/e403.png"
+25 RCDATA "../specs/e404.png"
+
+26 RCDATA "../specs/e501.png"
+27 RCDATA "../specs/e502.png"
+28 RCDATA "../specs/e503.png"
+29 RCDATA "../specs/e504.png"
+
+30 RCDATA "../specs/e601.png"
+31 RCDATA "../specs/e602.png"
+32 RCDATA "../specs/e603.png"
+33 RCDATA "../specs/e604.png"
+
+34 RCDATA "../specs/e701.png"
+35 RCDATA "../specs/e702.png"
+36 RCDATA "../specs/e703.png"
+37 RCDATA "../specs/e704.png"
+
+38 RCDATA "../specs/e801.png"
+39 RCDATA "../specs/e802.png"
+40 RCDATA "../specs/e803.png"
+41 RCDATA "../specs/e804.png"
+
+42 RCDATA "../specs/e901.png"
+43 RCDATA "../specs/e902.png"
+44 RCDATA "../specs/e903.png"
+45 RCDATA "../specs/e904.png"
