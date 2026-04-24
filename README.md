@@ -1,6 +1,6 @@
 # arcdps_individual_dps
 
-ArcDPS extension that restores individual time combat after the
+ArcDPS extension that restores individual combat time after the
 **April 14, 2026** arcdps update collapsed every fight stat to a single
 group clock. Each squad member has their own clock that pauses on
 `CBTS_EXITCOMBAT` and resumes on `CBTS_ENTERCOMBAT`, so personal DPS
@@ -12,9 +12,10 @@ stops diluting when you drop out of combat while others stay engaged.
 - **Active-damage window** denominator (matches arcdps's Damage panel)
 - **Per-self fight boundaries** — your row resets on your own next
   ENTERCOMBAT, not the squad's
-- **Profession icons + colored names** — all 9 core specs + 36 elite specs
+- **Profession icons + colored names** — 9 core professions + 27 known
+  elite specs (icon slots reserve 4 per prof for future additions)
 - **Click a row** for a detail window:
-  - Cumulative damage-over-time line chart
+  - DPS-over-time line chart (kilo-DPS scale so hover stays readable)
   - Per-skill breakdown (skill name / damage / DPS / hits), sorted by damage
 - **Cleanses + Strips** side windows, toggleable
 - **NPC / Gadget exclusion** filters (uses deltaconnected's authoritative
@@ -31,7 +32,7 @@ stops diluting when you drop out of combat while others stay engaged.
 3. Launch GW2. Verify via arcdps options → Extensions — should list
    `individual_dps` v0.3.0.
 
-Icons are embedded in the DLL. If they fail to load on your locale, drop
+Icons are embedded in the DLL. If they fail to load for any reason, drop
 `specs/*.png` into `<GW2>/addons/individual_dps_icons/` as a file fallback.
 
 ## Usage
@@ -109,9 +110,11 @@ Visual C++ redistributable installed on the target machine.
 - **Combat time** = time between first and last credited damage event
   (extended to "now" while the player is in combat). Matches arc's
   `Damage (excl)` panel denominator, not the combat-flag duration.
-- **Damage filter** rejects negative-value strikes — in arc's
-  post-2026-04-14 feed those represent barrier-absorbed /
-  invulnerable / block events, and arc itself doesn't count them.
+- **Damage filter** — strike events with result `BLOCK / EVADE /
+  INTERRUPT / ABSORB / BLIND` are dropped by result code; anything else
+  counts only when `ev->value > 0`. Negative values in arc's
+  post-2026-04-14 feed appear on barrier-absorbed / invulnerable hits
+  and arc itself does not count them toward DPS.
 - **combat_local** callback is a no-op: arc fires the same payload
   on both `combat` and `combat_local`, so processing both double-counts.
 - **Per-self reset** only fires on `CBTS_ENTERCOMBAT`. Damage landing
@@ -137,3 +140,7 @@ Visual C++ redistributable installed on the target machine.
 Unlicensed personal project. Not affiliated with arcdps, deltaconnected,
 or ArenaNet. Follows arcdps's "don't be a dick" policy — no network
 calls, no file I/O outside the debug log + settings ini.
+
+---
+
+Made with ❤️ by Troy
