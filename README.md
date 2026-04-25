@@ -16,8 +16,7 @@ stops diluting when you drop out of combat while others stay engaged.
 - **Per-self fight boundaries** — your row resets on your own next
   ENTERCOMBAT. A squadmate pulling a boss never resets your row while
   you are still out of combat
-- **Profession icons + colored names** — 9 core professions + 27 known
-  elite specs (icon slots reserve 4 per prof for future additions)
+- **Profession icons + colored names** 
 - **Click a row** for a detail window:
   - DPS-over-time line chart with y-axis grid, vertical crosshair on
     hover, and a tooltip showing time / DPS (with `k` suffix) /
