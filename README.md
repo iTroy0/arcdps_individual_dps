@@ -6,6 +6,8 @@ group clock. Each squad member has their own clock that pauses on
 `CBTS_EXITCOMBAT` and resumes on `CBTS_ENTERCOMBAT`, so personal DPS
 stops diluting when you drop out of combat while others stay engaged.
 
+![arcdps_individual_dps in-game preview](docs/screenshot.png)
+
 ## Features
 
 - **Damage / DPS per player** in a live ImGui window with EMA-smoothed
