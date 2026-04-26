@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -67,6 +69,28 @@ namespace {
             s.window_alpha = a;
         }
     }
+
+    // Clamp window geometry after load so a corrupted ini can't park a
+    // window off-screen where the user can't drag it back. The position
+    // range allows slight off-screen for multi-monitor setups; size has a
+    // hard floor so collapsed windows stay grabbable.
+    void clamp_geometry() {
+        auto& s = settings();
+        auto cx  = [](float& v) { if (v < -1024.0f) v = -1024.0f; if (v > 16384.0f) v = 16384.0f; };
+        auto csz = [](float& v, float def) {
+            if (!std::isfinite(v) || v < 100.0f) v = def;
+            if (v > 8192.0f) v = 8192.0f;
+        };
+        // x/y == -1.0 is the "uninitialized" sentinel — leave alone.
+        if (s.window_x != -1.0f) cx(s.window_x);
+        if (s.window_y != -1.0f) cx(s.window_y);
+        if (s.detail_x != -1.0f) cx(s.detail_x);
+        if (s.detail_y != -1.0f) cx(s.detail_y);
+        csz(s.window_w, 380.0f);
+        csz(s.window_h, 260.0f);
+        csz(s.detail_w, 420.0f);
+        csz(s.detail_h, 420.0f);
+    }
 }
 
 void settings_load() {
@@ -85,6 +109,7 @@ void settings_load() {
         apply_kv(k, v);
     }
     std::fclose(f);
+    clamp_geometry();
 }
 
 void settings_save() {

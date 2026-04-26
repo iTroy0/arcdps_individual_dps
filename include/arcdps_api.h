@@ -66,6 +66,13 @@ typedef struct arcdps_exports {
 
 // Statechange enum subset. Numeric values MUST be verified against current
 // arcdps header in-game before trusting. Known stable bases shown.
+//
+// Observed in current arc stream but not yet mapped here (seen via timing
+// diagnostics in v0.4.0): codes 11, 18, 27, 40, 41, 49. Code 41 in particular
+// is fired in a delayed flush at LOGEND with very large lag (~20s+),
+// suggesting post-fight aggregated stats. Names are not yet known — do not
+// guess; default-skip in switches keeps current behavior safe. Update this
+// enum when deltaconnected publishes the current arcdps_combat header.
 enum cbtstatechange : uint8_t {
     CBTS_NONE          = 0,
     CBTS_ENTERCOMBAT   = 1,

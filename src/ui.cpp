@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <windows.h>
 
+#include "exports.h"
 #include "icons.h"
 #include "settings.h"
 #include "tracker.h"
@@ -23,6 +26,12 @@ namespace {
         uint64_t shown     = 0;
     };
     std::unordered_map<uintptr_t, DpsCache> g_dps_cache;
+
+    // Reusable per-frame buffers — sit in static storage so we don't realloc
+    // a new vector + per-agent strings every render.
+    std::vector<Snapshot>  g_rows;
+    std::vector<size_t>    g_sort_idx;
+    AgentDetail            g_detail;
 
     uint64_t smooth_dps(uintptr_t id, uint64_t instant) {
         auto& c = g_dps_cache[id];
@@ -44,6 +53,14 @@ namespace {
         return c.shown;
     }
 
+    // Halve only the alpha component, preserving RGB. Old code clamped alpha
+    // to 0x80 regardless of the input's alpha — equivalent today since all
+    // prof colors use 255, but breaks if a non-255 alpha is ever passed.
+    ImU32 dim_alpha(ImU32 col) {
+        uint32_t a = (col >> 24) & 0xFFu;
+        a >>= 1;
+        return (col & 0x00FFFFFFu) | (a << 24);
+    }
 
     ImU32 prof_color(uint32_t prof) {
         switch (prof) {
@@ -110,10 +127,24 @@ namespace {
         }
     }
 
+    // Drop EMA cache entries for agents that have left the snapshot. Keeps
+    // the cache from accumulating stale ids across long sessions (WvW, etc).
+    void prune_dps_cache(const std::vector<Snapshot>& rows) {
+        if (g_dps_cache.size() <= rows.size()) return;
+        std::unordered_set<uintptr_t> live;
+        live.reserve(rows.size());
+        for (const auto& r : rows) live.insert(r.id);
+        for (auto it = g_dps_cache.begin(); it != g_dps_cache.end(); ) {
+            if (live.find(it->first) == live.end()) it = g_dps_cache.erase(it);
+            else                                    ++it;
+        }
+    }
+
     void draw_detail_window() {
         auto& s = settings();
         if (!s.detail_open || g_selected_agent == 0) return;
-        auto d = tracker().detail(g_selected_agent);
+        tracker().detail(g_selected_agent, g_detail);
+        const auto& d = g_detail;
         if (d.name.empty()) {
             s.detail_open = false;
             return;
@@ -307,6 +338,9 @@ namespace {
         s.detail_open = open;
     }
 
+    // Render a support window (Cleanses / Strips). Uses an index-sort over
+    // the shared rows vector so we don't copy Snapshots — a 50-player squad
+    // with both windows open used to do 100 string copies per frame.
     void draw_support_window(const char* title, bool* open,
                              const std::vector<Snapshot>& rows,
                              uint32_t Snapshot::*field) {
@@ -324,13 +358,15 @@ namespace {
                 ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 56.0f);
                 ImGui::TableHeadersRow();
 
-                std::vector<Snapshot> sorted = rows;
-                std::sort(sorted.begin(), sorted.end(),
-                    [field](const Snapshot& a, const Snapshot& b) {
-                        return a.*field > b.*field;
+                g_sort_idx.resize(rows.size());
+                for (size_t i = 0; i < rows.size(); ++i) g_sort_idx[i] = i;
+                std::sort(g_sort_idx.begin(), g_sort_idx.end(),
+                    [&rows, field](size_t a, size_t b) {
+                        return rows[a].*field > rows[b].*field;
                     });
 
-                for (const auto& r : sorted) {
+                for (size_t i : g_sort_idx) {
+                    const auto& r = rows[i];
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
@@ -340,7 +376,7 @@ namespace {
                     }
                     ImGui::TableNextColumn();
                     ImU32 col = prof_color(r.prof);
-                    if (!r.in_combat) col = (col & 0x00FFFFFF) | (0x80u << 24);
+                    if (!r.in_combat) col = dim_alpha(col);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     ImGui::TextUnformatted(r.name.c_str());
                     ImGui::PopStyleColor();
@@ -409,8 +445,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
 
-    auto rows = tracker().snapshot();
-    sort_rows(rows, s.sort_mode);
+    tracker().snapshot(g_rows);
+    sort_rows(g_rows, s.sort_mode);
 
     bool open = s.window_open;
     if (ImGui::Begin("Damage", &open)) {
@@ -440,7 +476,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
             ImGui::TableSetupColumn("Combat", ImGuiTableColumnFlags_WidthFixed, 48.0f);
             ImGui::TableHeadersRow();
 
-            for (const auto& r : rows) {
+            for (const auto& r : g_rows) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
@@ -451,10 +487,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                 ImGui::TableNextColumn();
                 {
                     ImU32 col = prof_color(r.prof);
-                    if (!r.in_combat) {
-                        // Dim OOC rows by halving alpha.
-                        col = (col & 0x00FFFFFF) | (0x80u << 24);
-                    }
+                    if (!r.in_combat) col = dim_alpha(col);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     ImGui::PushID(static_cast<ImGuiID>(r.id));
                     if (ImGui::Selectable(r.name.c_str(),
@@ -487,10 +520,12 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     s.window_open = open;
 
     if (s.cleanses_open || s.strips_open) {
-        draw_support_window("Cleanses", &s.cleanses_open, rows, &Snapshot::cleanse_count);
-        draw_support_window("Strips",   &s.strips_open,   rows, &Snapshot::strip_count);
+        draw_support_window("Cleanses", &s.cleanses_open, g_rows, &Snapshot::cleanse_count);
+        draw_support_window("Strips",   &s.strips_open,   g_rows, &Snapshot::strip_count);
     }
     draw_detail_window();
+
+    prune_dps_cache(g_rows);
     return 0;
 }
 
@@ -505,7 +540,7 @@ uintptr_t mod_options_end() {
         bool open = s.window_open;
         if (ImGui::Checkbox("Show window", &open)) s.window_open = open;
         draw_options_controls();
-        ImGui::TextDisabled("v0.4.0");
+        ImGui::Text("v%s", version());
     }
     return 0;
 }

@@ -1,6 +1,7 @@
 #include "tracker.h"
 
 #include <algorithm>
+#include <iterator>
 #include <windows.h>
 
 #include "log.h"
@@ -20,44 +21,46 @@ Options& options() {
 namespace {
     uint64_t wall_now() { return GetTickCount64(); }
 
+    // Boons we count for "strips". Sorted ascending → binary_search.
+    constexpr uint32_t kBoonIds[] = {
+          717, // Protection
+          718, // Regeneration
+          719, // Swiftness
+          725, // Fury
+          726, // Vigor
+          740, // Might
+          743, // Aegis
+          873, // Retaliation/Resolution
+         1122, // Stability
+         1187, // Quickness
+        26980, // Resistance
+        30328, // Alacrity
+    };
+
+    // Conditions we count for "cleanses". Sorted ascending → binary_search.
+    constexpr uint32_t kConditionIds[] = {
+          720, // Blind
+          721, // Crippled
+          722, // Chilled
+          723, // Poison
+          727, // Immobile
+          736, // Bleeding
+          737, // Burning
+          738, // Vulnerability
+          742, // Weakness
+          791, // Fear
+          861, // Confusion
+        19426, // Torment
+        26766, // Slow
+        27705, // Taunt
+    };
+
     bool is_boon(uint32_t id) {
-        switch (id) {
-            case   717: // Protection
-            case   718: // Regeneration
-            case   719: // Swiftness
-            case   725: // Fury
-            case   726: // Vigor
-            case   740: // Might
-            case   743: // Aegis
-            case   873: // Retaliation/Resolution
-            case  1122: // Stability
-            case  1187: // Quickness
-            case 26980: // Resistance
-            case 30328: // Alacrity
-                return true;
-            default: return false;
-        }
+        return std::binary_search(std::begin(kBoonIds), std::end(kBoonIds), id);
     }
 
     bool is_condition(uint32_t id) {
-        switch (id) {
-            case   720: // Blind
-            case   721: // Crippled
-            case   722: // Chilled
-            case   723: // Poison
-            case   727: // Immobile
-            case   736: // Bleeding
-            case   737: // Burning
-            case   738: // Vulnerability
-            case   742: // Weakness
-            case   791: // Fear
-            case   861: // Confusion
-            case 19426: // Torment
-            case 26766: // Slow
-            case 27705: // Taunt
-                return true;
-            default: return false;
-        }
+        return std::binary_search(std::begin(kConditionIds), std::end(kConditionIds), id);
     }
 
     bool looks_like_player(const ag* a, const ag* dst = nullptr) {
@@ -69,6 +72,14 @@ namespace {
         // with ':' (e.g. ":Troy.4370"). Minion/effect events have null dst.
         if (dst && dst->name && dst->name[0] == ':') return true;
         return false;
+    }
+
+    // Heuristic for state-only events (no dst) where we still want to
+    // recognize a squadmate. Player profs are 1..9 and elite != 0xFFFFFFFF
+    // (which marks NPCs).
+    bool prof_looks_like_player(const ag* a) {
+        if (!a) return false;
+        return a->prof >= 1 && a->prof <= 9 && a->elite != 0xFFFFFFFFu;
     }
 
     // Arc stores player class info in dst on tracking-add, not src.
@@ -95,16 +106,10 @@ namespace {
         s.last_damage_wall   = 0;
         s.strip_count        = 0;
         s.cleanse_count      = 0;
+        s.alive              = true;
         s.skills.clear();
         s.history.clear();
     }
-}
-
-void Tracker::on_combat_local(cbtevent* /*ev*/, ag* /*src*/, ag* /*dst*/,
-                              const char* /*skillname*/, uint64_t /*id*/, uint64_t /*revision*/) {
-    // combat_local is a strict duplicate of combat for self events — arc
-    // fires the same payload on both callbacks. Processing here would
-    // double-count damage and combat time. Do nothing.
 }
 
 void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
@@ -207,6 +212,21 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
 void Tracker::enter_combat(ag* src, uint64_t time) {
     if (!src || !src->id) return;
     auto* s = touch_agent(src);
+    if (!s) {
+        // Squadmate ENTERCOMBAT before tracking-add — register lazily.
+        // No dst is passed for state-changes, so we fall back to a prof-only
+        // heuristic. Anything that doesn't look like a player is dropped.
+        if (prof_looks_like_player(src)) {
+            auto& as = agents_[src->id];
+            as.id        = src->id;
+            as.name      = src->name ? src->name : "";
+            as.prof      = src->prof;
+            as.elite     = src->elite;
+            as.is_player = true;
+            as.present   = true;
+            s = &as;
+        }
+    }
     if (!s) return;
 
     if (!s->in_combat_wall) {
@@ -388,11 +408,13 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     sk.last_hit_wall = now;
 
     // Sample cumulative damage every ~500ms for the detail-window graph.
+    // Deque pop_front is O(1) — vector::erase(begin) was O(n) and stalled
+    // the combat thread during long fights once the cap was reached.
     if (owner->history.empty() ||
         now - owner->history.back().wall_ms >= 500) {
         owner->history.push_back({now, owner->damage_total});
         if (owner->history.size() > 4096) {
-            owner->history.erase(owner->history.begin());
+            owner->history.pop_front();
         }
     } else {
         owner->history.back().damage_total = owner->damage_total;
@@ -432,6 +454,7 @@ AgentState* Tracker::find_by_instid(uint16_t instid) {
 }
 
 void Tracker::reset_fight() {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = agents_.begin(); it != agents_.end(); ) {
         auto& s = it->second;
         if (!s.present && !s.is_self) {
@@ -444,6 +467,7 @@ void Tracker::reset_fight() {
             s.last_damage_wall  = 0;
             s.strip_count      = 0;
             s.cleanse_count    = 0;
+            s.alive            = true;
             s.skills.clear();
             s.history.clear();
             ++it;
@@ -453,38 +477,45 @@ void Tracker::reset_fight() {
     any_in_combat_ = false;
 }
 
-AgentDetail Tracker::detail(uintptr_t id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    AgentDetail d{};
-    auto it = agents_.find(id);
-    if (it == agents_.end()) return d;
-    const auto& s = it->second;
-    d.name  = s.name;
-    d.prof  = s.prof;
-    d.elite = s.elite;
-    d.history = s.history;
-    d.history_start_wall = s.first_damage_wall;
-    d.skills.reserve(s.skills.size());
-    const auto& names = skill_names_;
-    for (const auto& [sid, entry] : s.skills) {
-        SkillDetail sd;
-        sd.skill_id       = sid;
-        auto nit          = names.find(sid);
-        sd.name           = nit != names.end() ? nit->second : std::string();
-        sd.damage         = entry.damage;
-        sd.hits           = entry.hits;
-        sd.first_hit_wall = entry.first_hit_wall;
-        sd.last_hit_wall  = entry.last_hit_wall;
-        d.skills.push_back(std::move(sd));
+void Tracker::detail(uintptr_t id, AgentDetail& out) const {
+    out.skills.clear();
+    out.history.clear();
+    out.name.clear();
+    out.prof = 0;
+    out.elite = 0;
+    out.history_start_wall = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = agents_.find(id);
+        if (it == agents_.end()) return;
+        const auto& s = it->second;
+        out.name  = s.name;
+        out.prof  = s.prof;
+        out.elite = s.elite;
+        out.history_start_wall = s.first_damage_wall;
+        out.history.assign(s.history.begin(), s.history.end());
+        out.skills.reserve(s.skills.size());
+        for (const auto& [sid, entry] : s.skills) {
+            SkillDetail sd;
+            sd.skill_id       = sid;
+            auto nit          = skill_names_.find(sid);
+            sd.name           = nit != skill_names_.end() ? nit->second : std::string();
+            sd.damage         = entry.damage;
+            sd.hits           = entry.hits;
+            sd.first_hit_wall = entry.first_hit_wall;
+            sd.last_hit_wall  = entry.last_hit_wall;
+            out.skills.push_back(std::move(sd));
+        }
     }
-    std::sort(d.skills.begin(), d.skills.end(),
+    // Sort outside the lock so combat thread isn't blocked by std::sort
+    // for the duration of skill-table sorting (worst case ~100 entries).
+    std::sort(out.skills.begin(), out.skills.end(),
         [](const SkillDetail& a, const SkillDetail& b) { return a.damage > b.damage; });
-    return d;
 }
 
-std::vector<Snapshot> Tracker::snapshot() const {
+void Tracker::snapshot(std::vector<Snapshot>& out) const {
+    out.clear();
     std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<Snapshot> out;
     out.reserve(agents_.size());
     uint64_t now = wall_now();
     for (const auto& [id, s] : agents_) {
@@ -509,7 +540,6 @@ std::vector<Snapshot> Tracker::snapshot() const {
             s.in_combat_wall.has_value(),
         });
     }
-    return out;
 }
 
 } // namespace idps

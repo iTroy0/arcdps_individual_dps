@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -52,8 +53,10 @@ struct AgentState {
     uint32_t              cleanse_count = 0;
 
     // Per-skill damage + cumulative damage history for the detail window.
+    // History is a deque so the FIFO cap is O(1) — vector::erase(begin())
+    // would shift 4095 entries on every sample once full.
     std::unordered_map<uint32_t, SkillEntry> skills;
-    std::vector<DamagePoint>                 history;
+    std::deque<DamagePoint>                  history;
 };
 
 struct SkillDetail {
@@ -91,11 +94,10 @@ class Tracker {
 public:
     void on_combat(cbtevent* ev, ag* src, ag* dst,
                    const char* skillname, uint64_t id, uint64_t revision);
-    void on_combat_local(cbtevent* ev, ag* src, ag* dst,
-                         const char* skillname, uint64_t id, uint64_t revision);
 
-    std::vector<Snapshot> snapshot() const;
-    AgentDetail           detail(uintptr_t id) const;
+    // Caller-owned output buffers — avoids per-frame heap allocations.
+    void snapshot(std::vector<Snapshot>& out) const;
+    void detail(uintptr_t id, AgentDetail& out) const;
     void reset_fight();
 
 private:

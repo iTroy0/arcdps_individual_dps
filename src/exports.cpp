@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "arcdps_api.h"
 #include "combat.h"
 #include "icons.h"
 #include "log.h"
@@ -18,6 +19,8 @@ namespace {
     constexpr const char* kVersion = "0.4.0";
     constexpr const char* kBuild   = "0.4.0 (" __DATE__ " " __TIME__ ")";
 }
+
+const char* version() { return kVersion; }
 
 arcdps_exports* mod_init() {
     log_init();
@@ -37,7 +40,10 @@ arcdps_exports* mod_init() {
     g_exports.combat       = reinterpret_cast<void*>(&mod_combat);
     g_exports.imgui        = reinterpret_cast<void*>(&mod_imgui);
     g_exports.options_end  = reinterpret_cast<void*>(&mod_options_end);
-    g_exports.combat_local = reinterpret_cast<void*>(&mod_combat_local);
+    // combat_local is a strict duplicate of combat for self events — arc fires
+    // the same payload on both callbacks. Keeping the dispatch wired would
+    // double-count damage and combat time. Null pointer = arc skips the call.
+    g_exports.combat_local = nullptr;
     g_exports.wnd_filter   = nullptr;
     g_exports.options_windows = nullptr;
     return &g_exports;
