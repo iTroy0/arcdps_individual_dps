@@ -8,6 +8,11 @@ stops diluting when you drop out of combat while others stay engaged.
 
 ![arcdps_individual_dps in-game preview](docs/screenshot.png)
 
+## Download
+
+[Download Latest Release](https://github.com/iTroy0/arcdps_individual_dps/releases/latest)
+
+
 ## Features
 
 - **Damage / DPS per player** in a live ImGui window with EMA-smoothed
