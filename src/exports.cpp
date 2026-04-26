@@ -16,8 +16,8 @@ namespace {
     arcdps_exports g_exports{};
     constexpr uint32_t kPluginSig = 0x1D9A2E01u; // "individual dps" — avoid collisions
     constexpr const char* kName    = "individual_dps";
-    constexpr const char* kVersion = "0.4.0";
-    constexpr const char* kBuild   = "0.4.0 (" __DATE__ " " __TIME__ ")";
+    constexpr const char* kVersion = "0.4.1";
+    constexpr const char* kBuild   = "0.4.1 (" __DATE__ " " __TIME__ ")";
 }
 
 const char* version() { return kVersion; }

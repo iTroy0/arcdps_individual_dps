@@ -42,7 +42,7 @@ stops diluting when you drop out of combat while others stay engaged.
 2. Drop `arcdps_individual_dps.dll` next to arcdps
    (`<GW2>/addons/arcdps_individual_dps.dll` or `<GW2>/addons/`).
 3. Launch GW2. Verify via arcdps options → Extensions — should list
-   `individual_dps` v0.4.0.
+   `individual_dps` v0.4.1.
 
 Icons are embedded in the DLL. If they fail to load for any reason, drop
 `specs/*.png` into `<GW2>/addons/individual_dps_icons/` as a file fallback.
@@ -167,6 +167,12 @@ Visual C++ redistributable installed on the target machine.
   rolling-window DPS), per-skill active-window DPS, window opacity
   slider, ESC closes detail, per-self LOGSTART, implicit-enter on first
   self-strike, deferred d3d resource creation, restored DPS smoothing.
+- `0.4.1` — internal audit pass: O(1) damage-history FIFO (deque),
+  reused render buffers (no per-frame heap churn), shorter mutex window
+  in `detail()`, lazy-register squadmates whose `ENTERCOMBAT` arrives
+  before their tracking-add, `g_dps_cache` pruning across long sessions,
+  geometry clamp on settings load, centralized version string,
+  `combat_local` no-op dispatch removed. No behavior changes.
 
 ## License
 
