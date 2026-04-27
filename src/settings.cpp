@@ -52,6 +52,7 @@ namespace {
             if (mode > 3) mode = 3;
             s.sort_mode = mode;
         }
+        else if (k == "sort_reverse") s.sort_reverse = std::atoi(v.c_str()) != 0;
         else if (k == "cleanses_open") s.cleanses_open = std::atoi(v.c_str()) != 0;
         else if (k == "strips_open")   s.strips_open   = std::atoi(v.c_str()) != 0;
         else if (k == "detail_open")   s.detail_open   = std::atoi(v.c_str()) != 0;
@@ -122,6 +123,7 @@ void settings_save() {
     std::fprintf(f, "window_w=%.1f\n",      s.window_w);
     std::fprintf(f, "window_h=%.1f\n",      s.window_h);
     std::fprintf(f, "sort_mode=%d\n",       s.sort_mode);
+    std::fprintf(f, "sort_reverse=%d\n",    s.sort_reverse ? 1 : 0);
     std::fprintf(f, "cleanses_open=%d\n",   s.cleanses_open ? 1 : 0);
     std::fprintf(f, "strips_open=%d\n",     s.strips_open   ? 1 : 0);
     std::fprintf(f, "detail_open=%d\n",     s.detail_open   ? 1 : 0);

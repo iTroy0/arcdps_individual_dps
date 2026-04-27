@@ -16,8 +16,8 @@ namespace {
     arcdps_exports g_exports{};
     constexpr uint32_t kPluginSig = 0x1D9A2E01u; // "individual dps" — avoid collisions
     constexpr const char* kName    = "individual_dps";
-    constexpr const char* kVersion = "0.4.1";
-    constexpr const char* kBuild   = "0.4.1 (" __DATE__ " " __TIME__ ")";
+    constexpr const char* kVersion = "0.4.2";
+    constexpr const char* kBuild   = "0.4.2 (" __DATE__ " " __TIME__ ")";
 }
 
 const char* version() { return kVersion; }
@@ -42,8 +42,9 @@ arcdps_exports* mod_init() {
     // combat_local is a strict duplicate of combat for self events — arc fires
     // the same payload on both callbacks. Keeping the dispatch wired would
     // double-count damage and combat time. Null pointer = arc skips the call.
-    g_exports.combat_local = nullptr;
-    g_exports.wnd_filter   = nullptr;
+    g_exports.combat_local    = nullptr;
+    g_exports.wnd_nofilter    = nullptr;
+    g_exports.wnd_filter      = nullptr;
     g_exports.options_windows = nullptr;
     return &g_exports;
 }

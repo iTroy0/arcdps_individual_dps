@@ -130,7 +130,9 @@ namespace {
     // Drop EMA cache entries for agents that have left the snapshot. Keeps
     // the cache from accumulating stale ids across long sessions (WvW, etc).
     void prune_dps_cache(const std::vector<Snapshot>& rows) {
-        if (g_dps_cache.size() <= rows.size()) return;
+        // Always rebuild the live set; agent churn (one leaves, one joins)
+        // can keep the cache size equal to rows.size() while a stale id
+        // lingers. Cost is one set-build per frame for ~50 squadmates.
         std::unordered_set<uintptr_t> live;
         live.reserve(rows.size());
         for (const auto& r : rows) live.insert(r.id);
@@ -447,6 +449,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
 
     tracker().snapshot(g_rows);
     sort_rows(g_rows, s.sort_mode);
+    if (s.sort_reverse) std::reverse(g_rows.begin(), g_rows.end());
 
     uint64_t total_damage = 0;
     for (const auto& r : g_rows) total_damage += r.damage_total;
@@ -482,14 +485,24 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                                     ImGuiTableColumnFlags_WidthFixed, 22.0f);
             ImGui::TableSetupColumn("Name",
                                     ImGuiTableColumnFlags_WidthStretch);
+            // Numeric columns prefer descending on first click — DPS / damage /
+            // combat-time / share are conventionally read high-to-low.
             ImGui::TableSetupColumn("DPS",
-                                    ImGuiTableColumnFlags_WidthFixed, 56.0f);
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    56.0f);
             ImGui::TableSetupColumn("Damage",
-                                    ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    64.0f);
             ImGui::TableSetupColumn("Combat",
-                                    ImGuiTableColumnFlags_WidthFixed, 48.0f);
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    48.0f);
             ImGui::TableSetupColumn("%",
-                                    ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    40.0f);
             ImGui::TableHeadersRow();
 
             if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
@@ -526,6 +539,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                                 break;
                         }
                         if (handled) {
+                            s.sort_reverse = reverse;
                             sort_rows(g_rows, s.sort_mode);
                             if (reverse) std::reverse(g_rows.begin(), g_rows.end());
                         }
@@ -553,14 +567,16 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                     if (!r.in_combat) col = dim_alpha(col);
 
                     if (max_damage > 0 && r.damage_total > 0) {
-                        float frac = static_cast<float>(r.damage_total) /
-                                     static_cast<float>(max_damage);
-                        ImVec2 p0 = ImGui::GetCursorScreenPos();
-                        float row_h = ImGui::GetTextLineHeight();
                         float col_w = ImGui::GetContentRegionAvail().x;
-                        ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
-                        ImU32 bar_col = (col & 0x00FFFFFFu) | (0x50u << 24);
-                        ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                        if (col_w > 0.0f) {
+                            float frac = static_cast<float>(r.damage_total) /
+                                         static_cast<float>(max_damage);
+                            ImVec2 p0 = ImGui::GetCursorScreenPos();
+                            float row_h = ImGui::GetTextLineHeight();
+                            ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
+                            ImU32 bar_col = (col & 0x00FFFFFFu) | (0x50u << 24);
+                            ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                        }
                     }
 
                     ImGui::PushStyleColor(ImGuiCol_Text, col);

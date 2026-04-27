@@ -13,6 +13,9 @@ struct Settings {
     float window_w        = 380.0f;
     float window_h        = 260.0f;
     int   sort_mode       = 0; // 0=damage 1=dps 2=name 3=combat
+    // Reverses sort_rows()'s canonical order for the active sort_mode.
+    // Persisted so a user-toggled column direction survives reload.
+    bool  sort_reverse    = false;
 
     bool  cleanses_open   = false;
     bool  strips_open     = false;
