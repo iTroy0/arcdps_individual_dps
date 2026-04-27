@@ -319,7 +319,10 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     // a tracking-add for the local player on `combat`, only on `combat_local`
     // damage events where src->self == 1. Seed the instid mapping here too so
     // pet/minion attribution via src_master_instid resolves on first hit.
-    if (src->self && src->id) {
+    // Guard with the same player-prof heuristic used elsewhere so a
+    // self-marked NPC entity (boss-disguise, gizmo, mount) cannot create a
+    // malformed AgentState with elite == 0xFFFFFFFFu.
+    if (src->self && src->id && prof_looks_like_player(src)) {
         auto& s = agents_[src->id];
         if (s.id == 0) {
             s.id        = src->id;
@@ -476,6 +479,10 @@ void Tracker::reset_fight() {
             s.alive            = true;
             s.skills.clear();
             s.history.clear();
+            // Drop the per-agent instid alongside the global map so
+            // find_by_instid()'s linear fallback can't match a stale
+            // binding after instids get recycled between fights.
+            s.instid           = 0;
             ++it;
         }
     }

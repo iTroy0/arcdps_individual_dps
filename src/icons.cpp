@@ -199,9 +199,15 @@ void icons_ensure_loaded(const std::string& icons_dir) {
 }
 
 void icons_shutdown() {
-    for (auto& [k, v] : g_views) if (v) v->Release();
+    // Plugin unload runs on arcdps's release thread, not the D3D11 render
+    // thread that created the resources. Calling Release() on SRVs or the
+    // device from the wrong thread crashed inside the d3d driver on at
+    // least one NVIDIA setup (same class of issue that forced SRV creation
+    // to be deferred to mod_imgui in the first place — see icons.h). On
+    // process exit the OS reclaims everything; on hot /reloadarcdps the
+    // SRVs and one device-ref leak per reload (~9*4 SRVs, rare path).
+    // Trade a small leak on the rare reload path for stable shutdown.
     g_views.clear();
-    if (g_device) g_device->Release();
     g_device = nullptr;
     g_loaded = false;
 }

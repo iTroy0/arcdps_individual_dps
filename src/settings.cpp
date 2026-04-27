@@ -1,10 +1,12 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <locale.h>
 #include <string>
 #include <windows.h>
 #include "util.h"
@@ -17,6 +19,30 @@ Settings& settings() {
 }
 
 namespace {
+
+    // Forces LC_NUMERIC = "C" for the current thread so fprintf("%.1f") and
+    // atof() use a "." decimal separator regardless of the user's system
+    // locale. Without this, German / French / etc. locales serialize floats
+    // as "1,5", and atof on reload stops at the comma and returns 1.0,
+    // silently corrupting window geometry and alpha. Restored on scope exit.
+    class ScopedCNumericLocale {
+    public:
+        ScopedCNumericLocale() {
+            prev_mode_ = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+            if (const char* p = std::setlocale(LC_NUMERIC, nullptr)) prev_ = p;
+            std::setlocale(LC_NUMERIC, "C");
+        }
+        ~ScopedCNumericLocale() {
+            if (!prev_.empty()) std::setlocale(LC_NUMERIC, prev_.c_str());
+            if (prev_mode_ != -1) _configthreadlocale(prev_mode_);
+        }
+        ScopedCNumericLocale(const ScopedCNumericLocale&)            = delete;
+        ScopedCNumericLocale& operator=(const ScopedCNumericLocale&) = delete;
+    private:
+        int         prev_mode_ = -1;
+        std::string prev_;
+    };
+
     std::string ini_path() {
         char path[MAX_PATH]{};
         HMODULE self = self_module();
@@ -92,6 +118,7 @@ namespace {
 }
 
 void settings_load() {
+    ScopedCNumericLocale c_locale;
     FILE* f = nullptr;
     if (fopen_s(&f, ini_path().c_str(), "r") != 0 || !f) return;
     char line[256];
@@ -111,8 +138,14 @@ void settings_load() {
 }
 
 void settings_save() {
+    ScopedCNumericLocale c_locale;
+    // Atomic write: stream to <path>.tmp, fclose, then MoveFileEx with
+    // REPLACE_EXISTING so a crash mid-write can't truncate the live ini
+    // and silently restore defaults on next load.
+    std::string final_path = ini_path();
+    std::string tmp_path   = final_path + ".tmp";
     FILE* f = nullptr;
-    if (fopen_s(&f, ini_path().c_str(), "w") != 0 || !f) return;
+    if (fopen_s(&f, tmp_path.c_str(), "w") != 0 || !f) return;
     const auto& s = settings();
     std::fprintf(f, "# arcdps_individual_dps settings\n");
     std::fprintf(f, "exclude_npcs=%d\n",    s.exclude_npcs    ? 1 : 0);
@@ -132,7 +165,10 @@ void settings_save() {
     std::fprintf(f, "detail_w=%.1f\n",      s.detail_w);
     std::fprintf(f, "detail_h=%.1f\n",      s.detail_h);
     std::fprintf(f, "window_alpha=%.2f\n",  s.window_alpha);
+    std::fflush(f);
     std::fclose(f);
+    MoveFileExA(tmp_path.c_str(), final_path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
 
 } // namespace idps
