@@ -82,6 +82,18 @@ namespace {
         return a->prof >= 1 && a->prof <= 9 && a->elite != 0xFFFFFFFFu;
     }
 
+    // Target-type classification per deltaconnected evtc README:
+    //   Player: elite != 0xFFFFFFFF
+    //   NPC:    elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) == 0xFFFF0000
+    //   Gadget: elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) != 0xFFFF0000
+    enum class TargetType { Player, Npc, Gadget };
+
+    TargetType classify_target(const ag* dst) {
+        if (dst->elite != 0xFFFFFFFFu) return TargetType::Player;
+        if ((dst->prof & 0xFFFF0000u) == 0xFFFF0000u) return TargetType::Npc;
+        return TargetType::Gadget;
+    }
+
     // Arc stores player class info in dst on tracking-add, not src.
     void resolve_prof_elite(const ag* src, const ag* dst, uint32_t& prof, uint32_t& elite) {
         prof = 0; elite = 0;
@@ -183,7 +195,7 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 if (it != agents_.end()) it->second.alive = false;
             }
             break;
-        case CBTS_LOGSTART:
+        case CBTS_SQCOMBATSTART:
             // Per-self semantics: do not wipe squadmates here. Each
             // player resets via their own CBTS_ENTERCOMBAT (or implicit
             // enter on first credited damage). This keeps OOC players'
@@ -192,7 +204,7 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             // not yet in combat.
             in_encounter_ = true;
             break;
-        case CBTS_LOGEND:
+        case CBTS_SQCOMBATEND:
             for (auto& [id, s] : agents_) {
                 if (s.in_combat_wall) {
                     uint64_t w = wall_now();
@@ -276,12 +288,11 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (it != agents_.end() && it->second.is_player) {
             bool filtered = false;
             if (dst) {
-                bool dst_is_player = dst->elite != 0xFFFFFFFFu;
-                bool dst_is_npc    = !dst_is_player &&
-                                     (dst->prof & 0xFFFF0000u) == 0xFFFF0000u;
-                bool dst_is_gadget = !dst_is_player && !dst_is_npc;
-                if (options().exclude_gadgets.load(std::memory_order_relaxed) && dst_is_gadget) filtered = true;
-                if (options().exclude_npcs.load(std::memory_order_relaxed) && dst_is_npc) filtered = true;
+                auto tt = classify_target(dst);
+                if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
+                    tt == TargetType::Gadget) filtered = true;
+                if (options().exclude_npcs.load(std::memory_order_relaxed) &&
+                    tt == TargetType::Npc) filtered = true;
             }
             if (!filtered) {
                 if (ev->iff == 1 && is_boon(ev->skillid)) {
@@ -296,17 +307,12 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     if (ev->iff == 0) return;
 
-    // Target-type classification per deltaconnected evtc README:
-    //   Player: elite != 0xFFFFFFFF
-    //   NPC:    elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) == 0xFFFF0000
-    //   Gadget: elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) != 0xFFFF0000
     if (dst) {
-        bool dst_is_player = dst->elite != 0xFFFFFFFFu;
-        bool dst_is_npc    = !dst_is_player &&
-                             (dst->prof & 0xFFFF0000u) == 0xFFFF0000u;
-        bool dst_is_gadget = !dst_is_player && !dst_is_npc;
-        if (options().exclude_gadgets.load(std::memory_order_relaxed) && dst_is_gadget) return;
-        if (options().exclude_npcs.load(std::memory_order_relaxed) && dst_is_npc) return;
+        auto tt = classify_target(dst);
+        if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
+            tt == TargetType::Gadget) return;
+        if (options().exclude_npcs.load(std::memory_order_relaxed) &&
+            tt == TargetType::Npc) return;
     }
 
     // Lazy-register self on first damage — in solo play arc may never fire

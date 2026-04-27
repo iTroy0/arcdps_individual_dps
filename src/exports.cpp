@@ -36,7 +36,6 @@ arcdps_exports* mod_init() {
     g_exports.imguivers    = IMGUI_VERSION_NUM;
     g_exports.out_name     = kName;
     g_exports.out_build    = kBuild;
-    g_exports.wnd_nofilter = nullptr;
     g_exports.combat       = reinterpret_cast<void*>(&mod_combat);
     g_exports.imgui        = reinterpret_cast<void*>(&mod_imgui);
     g_exports.options_end  = reinterpret_cast<void*>(&mod_options_end);

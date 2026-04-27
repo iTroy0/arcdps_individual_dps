@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <windows.h>
+#include "util.h"
 
 namespace idps {
 
@@ -18,11 +19,7 @@ Settings& settings() {
 namespace {
     std::string ini_path() {
         char path[MAX_PATH]{};
-        HMODULE self = nullptr;
-        GetModuleHandleExA(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCSTR>(&ini_path), &self);
+        HMODULE self = self_module();
         DWORD n = GetModuleFileNameA(self, path, MAX_PATH);
         if (n == 0 || n == MAX_PATH) return "arcdps_individual_dps.ini";
         std::string p(path, n);

@@ -4,11 +4,14 @@
 #include <dxgi.h>
 
 #include <imgui.h>
+#include <wrl/client.h>
 
 #include "exports.h"
 #include "icons.h"
 #include "log.h"
 #include "ui.h"
+
+using Microsoft::WRL::ComPtr;
 
 BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*reserved*/) {
     switch (reason) {
@@ -44,21 +47,15 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     // (newer) — probe via QueryInterface.
     if (id3dptr && d3dversion == 11) {
         auto* unk = static_cast<IUnknown*>(id3dptr);
-        ID3D11Device* device = nullptr;
-        if (SUCCEEDED(unk->QueryInterface(__uuidof(ID3D11Device),
-                                          reinterpret_cast<void**>(&device)))) {
-            idps::icons_set_device(device);
-            device->Release();
+        ComPtr<ID3D11Device> device;
+        if (SUCCEEDED(unk->QueryInterface(IID_PPV_ARGS(&device)))) {
+            idps::icons_set_device(device.Get());
         } else {
-            IDXGISwapChain* swap = nullptr;
-            if (SUCCEEDED(unk->QueryInterface(__uuidof(IDXGISwapChain),
-                                              reinterpret_cast<void**>(&swap)))) {
-                if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D11Device),
-                                              reinterpret_cast<void**>(&device)))) {
-                    idps::icons_set_device(device);
-                    device->Release();
+            ComPtr<IDXGISwapChain> swap;
+            if (SUCCEEDED(unk->QueryInterface(IID_PPV_ARGS(&swap)))) {
+                if (SUCCEEDED(swap->GetDevice(IID_PPV_ARGS(&device)))) {
+                    idps::icons_set_device(device.Get());
                 }
-                swap->Release();
             }
         }
     }

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <string>
-
 namespace idps {
 
 // Simple ini-style settings stored next to the DLL as
