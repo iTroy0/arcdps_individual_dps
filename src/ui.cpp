@@ -448,6 +448,9 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     tracker().snapshot(g_rows);
     sort_rows(g_rows, s.sort_mode);
 
+    uint64_t total_damage = 0;
+    for (const auto& r : g_rows) total_damage += r.damage_total;
+
     bool open = s.window_open;
     if (ImGui::Begin("Damage", &open)) {
         ImVec2 pos  = ImGui::GetWindowPos();
@@ -460,21 +463,81 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
         if (ImGui::BeginPopupContextWindow("idps_ctx",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             draw_options_controls();
+            ImGui::Separator();
+            if (ImGui::Button("Reset fight")) {
+                tracker().reset_fight();
+                g_dps_cache.clear();
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::EndPopup();
         }
 
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
-        if (ImGui::BeginTable("idps", 5,
+        if (ImGui::BeginTable("idps", 6,
                               ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                              ImGuiTableFlags_Resizable |
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
                               ImGuiTableFlags_ScrollY)) {
-            ImGui::TableSetupColumn("Prof",   ImGuiTableColumnFlags_WidthFixed, 22.0f);
-            ImGui::TableSetupColumn("Name",   ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("DPS",    ImGuiTableColumnFlags_WidthFixed, 56.0f);
-            ImGui::TableSetupColumn("Damage", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-            ImGui::TableSetupColumn("Combat", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+            ImGui::TableSetupColumn("Prof",
+                                    ImGuiTableColumnFlags_WidthFixed, 22.0f);
+            ImGui::TableSetupColumn("Name",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("DPS",
+                                    ImGuiTableColumnFlags_WidthFixed, 56.0f);
+            ImGui::TableSetupColumn("Damage",
+                                    ImGuiTableColumnFlags_WidthFixed, 64.0f);
+            ImGui::TableSetupColumn("Combat",
+                                    ImGuiTableColumnFlags_WidthFixed, 48.0f);
+            ImGui::TableSetupColumn("%",
+                                    ImGuiTableColumnFlags_WidthFixed, 40.0f);
             ImGui::TableHeadersRow();
+
+            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+                if (specs->SpecsDirty) {
+                    if (specs->SpecsCount > 0) {
+                        int col_idx = specs->Specs[0].ColumnIndex;
+                        bool ascending =
+                            specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
+                        bool handled = true;
+                        bool reverse = false;
+                        switch (col_idx) {
+                            case 1:
+                                s.sort_mode = 2;
+                                reverse = !ascending;
+                                break;
+                            case 2:
+                                s.sort_mode = 1;
+                                reverse = ascending;
+                                break;
+                            case 3:
+                                s.sort_mode = 0;
+                                reverse = ascending;
+                                break;
+                            case 4:
+                                s.sort_mode = 3;
+                                reverse = ascending;
+                                break;
+                            case 5:
+                                s.sort_mode = 0;
+                                reverse = ascending;
+                                break;
+                            default:
+                                handled = false;
+                                break;
+                        }
+                        if (handled) {
+                            sort_rows(g_rows, s.sort_mode);
+                            if (reverse) std::reverse(g_rows.begin(), g_rows.end());
+                        }
+                    }
+                    specs->SpecsDirty = false;
+                }
+            }
+
+            uint64_t max_damage = 0;
+            for (const auto& r : g_rows) {
+                if (r.damage_total > max_damage) max_damage = r.damage_total;
+            }
 
             for (const auto& r : g_rows) {
                 ImGui::TableNextRow();
@@ -488,6 +551,18 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                 {
                     ImU32 col = prof_color(r.prof);
                     if (!r.in_combat) col = dim_alpha(col);
+
+                    if (max_damage > 0 && r.damage_total > 0) {
+                        float frac = static_cast<float>(r.damage_total) /
+                                     static_cast<float>(max_damage);
+                        ImVec2 p0 = ImGui::GetCursorScreenPos();
+                        float row_h = ImGui::GetTextLineHeight();
+                        float col_w = ImGui::GetContentRegionAvail().x;
+                        ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
+                        ImU32 bar_col = (col & 0x00FFFFFFu) | (0x50u << 24);
+                        ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                    }
+
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     ImGui::PushID(static_cast<ImGuiID>(r.id));
                     if (ImGui::Selectable(r.name.c_str(),
@@ -511,6 +586,14 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                 char tbuf[32];
                 format_time(tbuf, sizeof(tbuf), r.combat_ms);
                 ImGui::TextUnformatted(tbuf);
+                ImGui::TableNextColumn();
+                if (total_damage > 0) {
+                    float pct = static_cast<float>(r.damage_total) * 100.0f /
+                                static_cast<float>(total_damage);
+                    ImGui::Text("%.1f%%", pct);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
             }
             ImGui::EndTable();
         }
@@ -529,10 +612,6 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     return 0;
 }
 
-uintptr_t mod_wnd_nofilter(void* /*hwnd*/, uint32_t umsg,
-                           uintptr_t /*wparam*/, intptr_t /*lparam*/) {
-    return umsg;
-}
 
 uintptr_t mod_options_end() {
     if (ImGui::CollapsingHeader("Individual DPS")) {
