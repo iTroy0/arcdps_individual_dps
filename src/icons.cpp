@@ -17,6 +17,7 @@
 #include "stb_image.h"
 
 #include "log.h"
+#include "util.h"
 
 namespace idps {
 
@@ -28,23 +29,23 @@ namespace {
     const std::unordered_map<uint32_t, const char*>& elite_map() {
         static const std::unordered_map<uint32_t, const char*> m = {
             // Guardian
-            {27, "e101"}, {62, "e102"}, {65, "e103"},
+            {27, "e101"}, {62, "e102"}, {65, "e103"}, {81, "e104"},
             // Warrior
-            {18, "e201"}, {61, "e202"}, {68, "e203"},
+            {18, "e201"}, {61, "e202"}, {68, "e203"}, {74, "e204"},
             // Engineer
-            {43, "e301"}, {57, "e302"}, {70, "e303"},
+            {43, "e301"}, {57, "e302"}, {70, "e303"}, {75, "e304"},
             // Ranger
-            { 5, "e401"}, {55, "e402"}, {72, "e403"},
+            { 5, "e401"}, {55, "e402"}, {72, "e403"}, {78, "e404"},
             // Thief
-            { 7, "e501"}, {58, "e502"}, {71, "e503"},
+            { 7, "e501"}, {58, "e502"}, {71, "e503"}, {77, "e504"},
             // Elementalist
-            {48, "e601"}, {56, "e602"}, {67, "e603"},
+            {48, "e601"}, {56, "e602"}, {67, "e603"}, {80, "e604"},
             // Mesmer
-            {40, "e701"}, {59, "e702"}, {66, "e703"},
+            {40, "e701"}, {59, "e702"}, {66, "e703"}, {73, "e704"},
             // Necromancer
-            {34, "e801"}, {60, "e802"}, {64, "e803"},
+            {34, "e801"}, {60, "e802"}, {64, "e803"}, {76, "e804"},
             // Revenant
-            {52, "e901"}, {63, "e902"}, {69, "e903"},
+            {52, "e901"}, {63, "e902"}, {69, "e903"}, {79, "e904"},
         };
         return m;
     }
@@ -60,15 +61,6 @@ namespace {
         size_t got = std::fread(bytes.data(), 1, bytes.size(), f);
         std::fclose(f);
         return got == bytes.size();
-    }
-
-    HMODULE self_module() {
-        HMODULE self = nullptr;
-        GetModuleHandleExA(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCSTR>(&self_module), &self);
-        return self;
     }
 
     // Maps a filename stem to the numeric RCDATA id assigned in res/icons.rc.
