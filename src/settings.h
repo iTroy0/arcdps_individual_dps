@@ -20,6 +20,20 @@ struct Settings {
     bool  cleanses_open   = false;
     bool  strips_open     = false;
 
+    // Tints the self row's background so the local player stands out
+    // against teammates without overriding profession color.
+    bool  highlight_self  = true;
+
+    // White names in the player tables (Damage, Cleanses, Strips). Profession
+    // is still conveyed by the icon column and the per-row damage bar tint,
+    // so the lift in legibility is worth losing prof color on the text.
+    bool  name_white      = true;
+
+    // Auto-hide low-priority columns when the Damage window gets narrow.
+    // Drops %, Combat, Damage, then DPS in that order. Prof + Name always
+    // stay visible. Disable for manual control via the Hideable header menu.
+    bool  responsive_columns = true;
+
     // Background alpha applied to all plugin windows (Damage, detail,
     // Cleanses, Strips). Clamped to [0.10, 1.0] on load.
     float window_alpha    = 0.95f;

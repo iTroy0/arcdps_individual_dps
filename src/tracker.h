@@ -88,6 +88,7 @@ struct Snapshot {
     uint32_t    strip_count;
     uint32_t    cleanse_count;
     bool        in_combat;
+    bool        is_self;
 };
 
 class Tracker {

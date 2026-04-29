@@ -281,20 +281,29 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (it == skill_names_.end()) skill_names_.emplace(ev->skillid, skillname);
     }
 
-    // Strips/cleanses run before the iff==0 filter since cleanses are
-    // friend-on-friend events that the damage path drops.
-    if (ev->buff != 0 && ev->is_buffremove != 0 && src->id) {
-        auto it = agents_.find(src->id);
+    // Strips/cleanses. Arcdps buff_remove semantics: src is the agent that
+    // LOST the buff, dst is the agent that caused the removal. To attribute
+    // the strip/cleanse to the remover (the player), we look up dst->id, not
+    // src->id. is_buffremove==1 (ALL) is the actual strip/cleanse event;
+    // ==2 fires per stack on natural expiry and would massively over-count.
+    // Runs before the iff==0 filter since cleanses are friend-on-friend
+    // events that the damage path drops.
+    if (ev->buff != 0 && ev->is_buffremove == 1 && dst && dst->id) {
+        auto it = agents_.find(dst->id);
         if (it != agents_.end() && it->second.is_player) {
             bool filtered = false;
-            if (dst) {
-                auto tt = classify_target(dst);
+            if (src) {
+                auto tt = classify_target(src);
                 if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
                     tt == TargetType::Gadget) filtered = true;
                 if (options().exclude_npcs.load(std::memory_order_relaxed) &&
                     tt == TargetType::Npc) filtered = true;
             }
             if (!filtered) {
+                // iff is from src's (victim's) perspective. A foe whose boon
+                // was just stripped sees the remover as a foe (iff==1); an
+                // ally whose condi was just cleansed sees the remover as a
+                // friend (iff==0).
                 if (ev->iff == 1 && is_boon(ev->skillid)) {
                     it->second.strip_count++;
                 } else if (ev->iff == 0 && is_condition(ev->skillid)) {
@@ -551,6 +560,7 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
             s.in_combat_wall.has_value(),
+            s.is_self,
         });
     }
 }

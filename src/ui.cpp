@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -53,27 +54,31 @@ namespace {
         return c.shown;
     }
 
-    // Halve only the alpha component, preserving RGB. Old code clamped alpha
-    // to 0x80 regardless of the input's alpha — equivalent today since all
-    // prof colors use 255, but breaks if a non-255 alpha is ever passed.
+    // Drop alpha to ~67% (instead of 50%) for out-of-combat rows. Halving
+    // alpha was washing names out against the translucent window background;
+    // 170/255 keeps the in/out-of-combat distinction visible without making
+    // names unreadable. Preserves RGB so prof color identity stays intact.
     ImU32 dim_alpha(ImU32 col) {
         uint32_t a = (col >> 24) & 0xFFu;
-        a >>= 1;
+        a = (a * 170u) / 255u;
         return (col & 0x00FFFFFFu) | (a << 24);
     }
 
     ImU32 prof_color(uint32_t prof) {
+        // Lifted Mesmer / Necro / Thief / Rev / Engineer luminance — the
+        // originals were dark enough on a translucent window that names
+        // crowded the background. The other four already read well.
         switch (prof) {
             case 1: return IM_COL32(114, 193, 217, 255); // Guardian
             case 2: return IM_COL32(255, 209, 102, 255); // Warrior
-            case 3: return IM_COL32(208, 156,  89, 255); // Engineer
+            case 3: return IM_COL32(218, 175, 110, 255); // Engineer
             case 4: return IM_COL32(140, 220, 130, 255); // Ranger
-            case 5: return IM_COL32(192, 143, 149, 255); // Thief
+            case 5: return IM_COL32(220, 170, 175, 255); // Thief
             case 6: return IM_COL32(246, 138, 135, 255); // Elementalist
-            case 7: return IM_COL32(182, 121, 213, 255); // Mesmer
-            case 8: return IM_COL32( 82, 167, 111, 255); // Necromancer
-            case 9: return IM_COL32(209, 110,  90, 255); // Revenant
-            default: return IM_COL32(200, 200, 200, 255);
+            case 7: return IM_COL32(214, 158, 240, 255); // Mesmer
+            case 8: return IM_COL32(120, 210, 145, 255); // Necromancer
+            case 9: return IM_COL32(232, 142, 120, 255); // Revenant
+            default: return IM_COL32(220, 220, 220, 255);
         }
     }
 
@@ -294,8 +299,9 @@ namespace {
             ImGui::Separator();
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
             if (ImGui::BeginTable("skills", 5,
-                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                  ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+                                  ImGuiTableFlags_Reorderable |
                                   ImGuiTableFlags_ScrollY)) {
                 ImGui::TableSetupColumn("#",      ImGuiTableColumnFlags_WidthFixed, 22.0f);
                 ImGui::TableSetupColumn("Skill",  ImGuiTableColumnFlags_WidthStretch);
@@ -352,8 +358,9 @@ namespace {
         if (ImGui::Begin(title, open)) {
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
             if (ImGui::BeginTable("tbl", 3,
-                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                  ImGuiTableFlags_Resizable |
+                                  ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+                                  ImGuiTableFlags_Reorderable |
                                   ImGuiTableFlags_ScrollY)) {
                 ImGui::TableSetupColumn("Prof",  ImGuiTableColumnFlags_WidthFixed, 22.0f);
                 ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
@@ -377,7 +384,9 @@ namespace {
                         ImGui::TextUnformatted(prof_short(r.prof));
                     }
                     ImGui::TableNextColumn();
-                    ImU32 col = prof_color(r.prof);
+                    ImU32 col = settings().name_white
+                              ? IM_COL32(255, 255, 255, 255)
+                              : prof_color(r.prof);
                     if (!r.in_combat) col = dim_alpha(col);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     ImGui::TextUnformatted(r.name.c_str());
@@ -418,6 +427,15 @@ namespace {
         bool st = s.strips_open;
         if (ImGui::Checkbox("Cleanses window", &cl)) s.cleanses_open = cl;
         if (ImGui::Checkbox("Strips window",   &st)) s.strips_open   = st;
+
+        bool hs = s.highlight_self;
+        if (ImGui::Checkbox("Highlight self row", &hs)) s.highlight_self = hs;
+
+        bool nw = s.name_white;
+        if (ImGui::Checkbox("White names", &nw)) s.name_white = nw;
+
+        bool rc = s.responsive_columns;
+        if (ImGui::Checkbox("Responsive columns", &rc)) s.responsive_columns = rc;
 
         float alpha = s.window_alpha;
         ImGui::SetNextItemWidth(120.0f);
@@ -475,11 +493,15 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
             ImGui::EndPopup();
         }
 
+        // Capture available width before BeginTable so we can drop
+        // low-priority columns when the user shrinks the window.
+        float table_avail_w = ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
         if (ImGui::BeginTable("idps", 6,
-                              ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                              ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
+                              ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
                               ImGuiTableFlags_ScrollY)) {
             ImGui::TableSetupColumn("Prof",
                                     ImGuiTableColumnFlags_WidthFixed, 22.0f);
@@ -504,6 +526,27 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     40.0f);
             ImGui::TableHeadersRow();
+
+            // Drop low-priority columns as the window narrows. Order of
+            // sacrifice: % -> Combat -> Damage -> DPS. Prof + Name always
+            // stay. Thresholds are the column's own fixed width plus typical
+            // cell padding; below that the column eats more space than its
+            // information value. Skipped when the user disables responsive
+            // mode (lets the Hideable header menu drive instead).
+            if (s.responsive_columns) {
+                if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
+                    bool show_pct    = table_avail_w > 320.0f;
+                    bool show_combat = table_avail_w > 270.0f;
+                    bool show_dmg    = table_avail_w > 220.0f;
+                    bool show_dps    = table_avail_w > 170.0f;
+                    if (tbl->ColumnsCount >= 6) {
+                        tbl->Columns[2].IsEnabledNextFrame = show_dps;
+                        tbl->Columns[3].IsEnabledNextFrame = show_dmg;
+                        tbl->Columns[4].IsEnabledNextFrame = show_combat;
+                        tbl->Columns[5].IsEnabledNextFrame = show_pct;
+                    }
+                }
+            }
 
             if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
                 if (specs->SpecsDirty) {
@@ -555,6 +598,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
 
             for (const auto& r : g_rows) {
                 ImGui::TableNextRow();
+                if (r.is_self && s.highlight_self) {
+                    // Subtle blue tint over the row's striped bg so the local
+                    // player is identifiable at a glance without overriding
+                    // profession color on the name itself.
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                           IM_COL32(80, 150, 220, 40));
+                }
                 ImGui::TableNextColumn();
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
                     ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
@@ -563,8 +613,14 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                 }
                 ImGui::TableNextColumn();
                 {
-                    ImU32 col = prof_color(r.prof);
-                    if (!r.in_combat) col = dim_alpha(col);
+                    ImU32 prof_col = prof_color(r.prof);
+                    ImU32 text_col = s.name_white
+                                   ? IM_COL32(255, 255, 255, 255)
+                                   : prof_col;
+                    if (!r.in_combat) {
+                        prof_col = dim_alpha(prof_col);
+                        text_col = dim_alpha(text_col);
+                    }
 
                     if (max_damage > 0 && r.damage_total > 0) {
                         float col_w = ImGui::GetContentRegionAvail().x;
@@ -574,12 +630,12 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                             ImVec2 p0 = ImGui::GetCursorScreenPos();
                             float row_h = ImGui::GetTextLineHeight();
                             ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
-                            ImU32 bar_col = (col & 0x00FFFFFFu) | (0x50u << 24);
+                            ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
                             ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
                         }
                     }
 
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
+                    ImGui::PushStyleColor(ImGuiCol_Text, text_col);
                     ImGui::PushID(static_cast<ImGuiID>(r.id));
                     if (ImGui::Selectable(r.name.c_str(),
                                           g_selected_agent == r.id && s.detail_open,
