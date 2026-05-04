@@ -627,11 +627,27 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                     bool show_combat = table_avail_w > 270.0f;
                     bool show_dmg    = table_avail_w > 220.0f;
                     bool show_dps    = table_avail_w > 170.0f;
+                    // Only force enabled-state on threshold crossings so the
+                    // user's manual header-menu toggles persist between width
+                    // changes. Without this guard, every frame stomps the user
+                    // checkbox and they can't hide DPS / Damage / Combat / %.
+                    static bool prev_pct = true, prev_combat = true,
+                                prev_dmg = true, prev_dps = true;
+                    static bool init = false;
                     if (tbl->ColumnsCount >= 6) {
-                        tbl->Columns[2].IsEnabledNextFrame = show_dps;
-                        tbl->Columns[3].IsEnabledNextFrame = show_dmg;
-                        tbl->Columns[4].IsEnabledNextFrame = show_combat;
-                        tbl->Columns[5].IsEnabledNextFrame = show_pct;
+                        if (!init || show_dps    != prev_dps)
+                            tbl->Columns[2].IsEnabledNextFrame = show_dps;
+                        if (!init || show_dmg    != prev_dmg)
+                            tbl->Columns[3].IsEnabledNextFrame = show_dmg;
+                        if (!init || show_combat != prev_combat)
+                            tbl->Columns[4].IsEnabledNextFrame = show_combat;
+                        if (!init || show_pct    != prev_pct)
+                            tbl->Columns[5].IsEnabledNextFrame = show_pct;
+                        prev_dps    = show_dps;
+                        prev_dmg    = show_dmg;
+                        prev_combat = show_combat;
+                        prev_pct    = show_pct;
+                        init = true;
                     }
                 }
             }
@@ -710,7 +726,11 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
                         ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                        // Draw on the table's background channel so the bar
+                        // is clipped to the table rect, not the current cell.
+                        ImGui::TablePushBackgroundChannel();
                         ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                        ImGui::TablePopBackgroundChannel();
                     }
                 }
 
@@ -773,7 +793,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                 if (total_damage > 0) {
                     float pct = static_cast<float>(r.damage_total) * 100.0f /
                                 static_cast<float>(total_damage);
-                    ImGui::Text("%.1f%%", pct);
+                    ImGui::Text("%.0f%%", pct);
                 } else {
                     ImGui::TextUnformatted("-");
                 }
