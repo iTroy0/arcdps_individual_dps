@@ -65,20 +65,22 @@ namespace {
     }
 
     ImU32 prof_color(uint32_t prof) {
-        // Lifted Mesmer / Necro / Thief / Rev / Engineer luminance — the
-        // originals were dark enough on a translucent window that names
-        // crowded the background. The other four already read well.
+        // Saturation + luminance lifted across the board so prof identity
+        // pops on the translucent window background. Hues kept matching the
+        // canonical GW2 prof palette so users still parse them at a glance.
+        // Necro stays a darker green vs Ranger's lighter green so the two
+        // don't blur into each other in mixed squads.
         switch (prof) {
-            case 1: return IM_COL32(114, 193, 217, 255); // Guardian
-            case 2: return IM_COL32(255, 209, 102, 255); // Warrior
-            case 3: return IM_COL32(218, 175, 110, 255); // Engineer
-            case 4: return IM_COL32(140, 220, 130, 255); // Ranger
-            case 5: return IM_COL32(220, 170, 175, 255); // Thief
-            case 6: return IM_COL32(246, 138, 135, 255); // Elementalist
-            case 7: return IM_COL32(214, 158, 240, 255); // Mesmer
-            case 8: return IM_COL32(120, 210, 145, 255); // Necromancer
-            case 9: return IM_COL32(232, 142, 120, 255); // Revenant
-            default: return IM_COL32(220, 220, 220, 255);
+            case 1: return IM_COL32(120, 220, 255, 255); // Guardian
+            case 2: return IM_COL32(255, 220,  90, 255); // Warrior
+            case 3: return IM_COL32(240, 180,  85, 255); // Engineer
+            case 4: return IM_COL32(150, 240, 110, 255); // Ranger
+            case 5: return IM_COL32(255, 170, 190, 255); // Thief
+            case 6: return IM_COL32(255, 130, 120, 255); // Elementalist
+            case 7: return IM_COL32(225, 145, 255, 255); // Mesmer
+            case 8: return IM_COL32( 90, 215, 145, 255); // Necromancer
+            case 9: return IM_COL32(245, 130, 110, 255); // Revenant
+            default: return IM_COL32(230, 230, 230, 255);
         }
     }
 
@@ -134,6 +136,43 @@ namespace {
 
     // Drop EMA cache entries for agents that have left the snapshot. Keeps
     // the cache from accumulating stale ids across long sessions (WvW, etc).
+    // Apply window position with optional viewport-relative mode. When
+    // pos_relative is on and rx/ry are valid, position is computed as a
+    // fraction of the display area so the window keeps its on-screen
+    // location across resolution changes / monitor swaps. ImGui v1.80
+    // (non-docking branch) doesn't expose GetMainViewport, so we use
+    // io.DisplaySize which arc fills with the swapchain back-buffer size.
+    void apply_window_pos(float abs_x, float abs_y, float rx, float ry, bool relative) {
+        if (relative && rx >= 0.0f && ry >= 0.0f) {
+            const ImVec2& ds = ImGui::GetIO().DisplaySize;
+            ImGui::SetNextWindowPos(ImVec2(ds.x * rx, ds.y * ry),
+                                    ImGuiCond_FirstUseEver);
+        } else if (abs_x >= 0.0f && abs_y >= 0.0f) {
+            ImGui::SetNextWindowPos(ImVec2(abs_x, abs_y), ImGuiCond_FirstUseEver);
+        }
+    }
+
+    // Capture window pos as both absolute pixels and display-relative
+    // fractions every frame, so toggling pos_relative later has valid
+    // fractions to apply on next session start.
+    void capture_window_pos(const ImVec2& pos, float& abs_x, float& abs_y,
+                            float& rx, float& ry) {
+        abs_x = pos.x;
+        abs_y = pos.y;
+        const ImVec2& ds = ImGui::GetIO().DisplaySize;
+        if (ds.x > 0.0f) rx = pos.x / ds.x;
+        if (ds.y > 0.0f) ry = pos.y / ds.y;
+    }
+
+    // Vertically center a 14x14 prof icon against the row's text baseline so
+    // the icon doesn't sit higher than the name text in the same row.
+    void align_icon_to_text() {
+        float dy = (ImGui::GetTextLineHeight() - 14.0f) * 0.5f;
+        if (dy > 0.0f) {
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + dy);
+        }
+    }
+
     void prune_dps_cache(const std::vector<Snapshot>& rows) {
         // Always rebuild the live set; agent churn (one leaves, one joins)
         // can keep the cache size equal to rows.size() while a stale id
@@ -160,10 +199,8 @@ namespace {
         char title[128];
         std::snprintf(title, sizeof(title), "%s - details###idps_detail", d.name.c_str());
 
-        if (s.detail_x >= 0.0f && s.detail_y >= 0.0f) {
-            ImGui::SetNextWindowPos(ImVec2(s.detail_x, s.detail_y),
-                                    ImGuiCond_FirstUseEver);
-        }
+        apply_window_pos(s.detail_x, s.detail_y, s.detail_rx, s.detail_ry,
+                         s.pos_relative);
         ImGui::SetNextWindowSize(ImVec2(s.detail_w, s.detail_h),
                                  ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(s.window_alpha);
@@ -177,8 +214,8 @@ namespace {
             }
             ImVec2 dpos = ImGui::GetWindowPos();
             ImVec2 dsiz = ImGui::GetWindowSize();
-            s.detail_x = dpos.x;
-            s.detail_y = dpos.y;
+            capture_window_pos(dpos, s.detail_x, s.detail_y,
+                               s.detail_rx, s.detail_ry);
             s.detail_w = dsiz.x;
             s.detail_h = dsiz.y;
             // Damage over time graph.
@@ -298,11 +335,13 @@ namespace {
 
             ImGui::Separator();
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
-            if (ImGui::BeginTable("skills", 5,
-                                  ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
-                                  ImGuiTableFlags_Reorderable |
-                                  ImGuiTableFlags_ScrollY)) {
+            ImGuiTableFlags sk_flags =
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+                ImGuiTableFlags_Reorderable |
+                ImGuiTableFlags_ScrollY;
+            if (!s.body_borders) sk_flags |= ImGuiTableFlags_NoBordersInBody;
+            if (ImGui::BeginTable("skills", 5, sk_flags)) {
                 ImGui::TableSetupColumn("#",      ImGuiTableColumnFlags_WidthFixed, 22.0f);
                 ImGui::TableSetupColumn("Skill",  ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("Damage", ImGuiTableColumnFlags_WidthFixed, 64.0f);
@@ -357,11 +396,13 @@ namespace {
         ImGui::SetNextWindowBgAlpha(settings().window_alpha);
         if (ImGui::Begin(title, open)) {
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
-            if (ImGui::BeginTable("tbl", 3,
-                                  ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
-                                  ImGuiTableFlags_Reorderable |
-                                  ImGuiTableFlags_ScrollY)) {
+            ImGuiTableFlags sup_flags =
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+                ImGuiTableFlags_Reorderable |
+                ImGuiTableFlags_ScrollY;
+            if (!settings().body_borders) sup_flags |= ImGuiTableFlags_NoBordersInBody;
+            if (ImGui::BeginTable("tbl", 3, sup_flags)) {
                 ImGui::TableSetupColumn("Prof",  ImGuiTableColumnFlags_WidthFixed, 22.0f);
                 ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 56.0f);
@@ -379,14 +420,20 @@ namespace {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
+                        align_icon_to_text();
                         ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
                     } else {
                         ImGui::TextUnformatted(prof_short(r.prof));
                     }
                     ImGui::TableNextColumn();
-                    ImU32 col = settings().name_white
-                              ? IM_COL32(255, 255, 255, 255)
-                              : prof_color(r.prof);
+                    ImU32 col;
+                    if (r.is_self && settings().self_name_gold) {
+                        col = IM_COL32(255, 200, 60, 255);
+                    } else if (settings().name_white) {
+                        col = IM_COL32(255, 255, 255, 255);
+                    } else {
+                        col = prof_color(r.prof);
+                    }
                     if (!r.in_combat) col = dim_alpha(col);
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     ImGui::TextUnformatted(r.name.c_str());
@@ -401,6 +448,17 @@ namespace {
         ImGui::End();
     }
 
+    // Tooltip helper that doesn't depend on the newer SetItemTooltip API.
+    void item_tooltip(const char* text) {
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+
     void draw_options_controls() {
         auto& s = settings();
         bool ex_npcs    = options().exclude_npcs.load(std::memory_order_relaxed);
@@ -409,11 +467,18 @@ namespace {
             options().exclude_npcs.store(ex_npcs, std::memory_order_relaxed);
             s.exclude_npcs = ex_npcs;
         }
+        item_tooltip("Drops damage / strips / cleanses against world NPCs "
+                     "(open-world enemies, structure NPCs, most training "
+                     "golems in the SAB / Aerodrome lobby).");
         ImGui::SameLine();
         if (ImGui::Checkbox("Exclude Gadgets", &ex_gadgets)) {
             options().exclude_gadgets.store(ex_gadgets, std::memory_order_relaxed);
             s.exclude_gadgets = ex_gadgets;
         }
+        item_tooltip("Drops damage against gadget-class targets. Some "
+                     "training golems (Special Forces Training Area) are "
+                     "classified as gadgets, not NPCs — uncheck this if your "
+                     "test target's damage isn't registering.");
 
         const char* sort_items[] = {"Damage", "DPS", "Name", "Combat time"};
         int sort_mode = s.sort_mode;
@@ -434,8 +499,31 @@ namespace {
         bool nw = s.name_white;
         if (ImGui::Checkbox("White names", &nw)) s.name_white = nw;
 
+        bool gold = s.self_name_gold;
+        if (ImGui::Checkbox("Gold self name", &gold)) s.self_name_gold = gold;
+        item_tooltip("Render your own player name in gold so it stands out "
+                     "against squadmates, regardless of profession color.");
+
         bool rc = s.responsive_columns;
         if (ImGui::Checkbox("Responsive columns", &rc)) s.responsive_columns = rc;
+
+        bool bb = s.body_borders;
+        if (ImGui::Checkbox("Column dividers in body", &bb)) s.body_borders = bb;
+        item_tooltip("Show thin vertical lines between columns in the table "
+                     "body. Header dividers stay visible either way so "
+                     "columns remain resizable.");
+
+        bool fb = s.bar_full_row;
+        if (ImGui::Checkbox("Full-row damage bar", &fb)) s.bar_full_row = fb;
+        item_tooltip("When on, the per-player damage bar fills the entire "
+                     "row width. Off restricts it to the Name column.");
+
+        bool pr = s.pos_relative;
+        if (ImGui::Checkbox("Screen-relative position", &pr)) s.pos_relative = pr;
+        item_tooltip("Store window position as a fraction of the game "
+                     "viewport instead of absolute pixels, so the window "
+                     "stays in roughly the same on-screen spot after "
+                     "resolution changes or monitor swaps.");
 
         float alpha = s.window_alpha;
         ImGui::SetNextItemWidth(120.0f);
@@ -457,10 +545,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     auto& s = settings();
     if (!s.window_open) return 0;
 
-    if (s.window_x >= 0.0f && s.window_y >= 0.0f) {
-        ImGui::SetNextWindowPos(ImVec2(s.window_x, s.window_y),
-                                ImGuiCond_FirstUseEver);
-    }
+    apply_window_pos(s.window_x, s.window_y, s.window_rx, s.window_ry,
+                     s.pos_relative);
     ImGui::SetNextWindowSize(ImVec2(s.window_w, s.window_h),
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
@@ -476,8 +562,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     if (ImGui::Begin("Damage", &open)) {
         ImVec2 pos  = ImGui::GetWindowPos();
         ImVec2 size = ImGui::GetWindowSize();
-        s.window_x = pos.x;
-        s.window_y = pos.y;
+        capture_window_pos(pos, s.window_x, s.window_y,
+                           s.window_rx, s.window_ry);
         s.window_w = size.x;
         s.window_h = size.y;
 
@@ -498,11 +584,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
         float table_avail_w = ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
-        if (ImGui::BeginTable("idps", 6,
-                              ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
-                              ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
-                              ImGuiTableFlags_ScrollY)) {
+        ImGuiTableFlags table_flags =
+            ImGuiTableFlags_RowBg |
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
+            ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
+            ImGuiTableFlags_ScrollY;
+        if (!s.body_borders) table_flags |= ImGuiTableFlags_NoBordersInBody;
+        if (ImGui::BeginTable("idps", 6, table_flags)) {
             ImGui::TableSetupColumn("Prof",
                                     ImGuiTableColumnFlags_WidthFixed, 22.0f);
             ImGui::TableSetupColumn("Name",
@@ -606,23 +694,46 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                                            IM_COL32(80, 150, 220, 40));
                 }
                 ImGui::TableNextColumn();
+
+                // Full-row damage bar drawn here (before any cell text) so
+                // text/icons render on top of the bar in the same drawlist.
+                ImU32 prof_col = prof_color(r.prof);
+                if (!r.in_combat) prof_col = dim_alpha(prof_col);
+
+                if (s.bar_full_row && max_damage > 0 && r.damage_total > 0) {
+                    if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
+                        float frac = static_cast<float>(r.damage_total) /
+                                     static_cast<float>(max_damage);
+                        float bar_x0 = tbl->WorkRect.Min.x;
+                        float bar_x1 = tbl->WorkRect.Max.x;
+                        float row_h  = ImGui::GetTextLineHeight();
+                        ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
+                        ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
+                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                        ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                    }
+                }
+
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
+                    align_icon_to_text();
                     ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
                 } else {
                     ImGui::TextUnformatted(prof_short(r.prof));
                 }
                 ImGui::TableNextColumn();
                 {
-                    ImU32 prof_col = prof_color(r.prof);
-                    ImU32 text_col = s.name_white
-                                   ? IM_COL32(255, 255, 255, 255)
-                                   : prof_col;
-                    if (!r.in_combat) {
-                        prof_col = dim_alpha(prof_col);
-                        text_col = dim_alpha(text_col);
+                    ImU32 text_col;
+                    if (r.is_self && s.self_name_gold) {
+                        text_col = IM_COL32(255, 200, 60, 255);
+                    } else if (s.name_white) {
+                        text_col = IM_COL32(255, 255, 255, 255);
+                    } else {
+                        text_col = prof_col;
                     }
+                    if (!r.in_combat) text_col = dim_alpha(text_col);
 
-                    if (max_damage > 0 && r.damage_total > 0) {
+                    // Per-cell bar (Name column only) when full-row is off.
+                    if (!s.bar_full_row && max_damage > 0 && r.damage_total > 0) {
                         float col_w = ImGui::GetContentRegionAvail().x;
                         if (col_w > 0.0f) {
                             float frac = static_cast<float>(r.damage_total) /

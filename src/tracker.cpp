@@ -318,6 +318,17 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     if (dst) {
         auto tt = classify_target(dst);
+        // Log each target's classification once per fight so users can
+        // see whether their test golem is being treated as Gadget or NPC
+        // when "Exclude X" toggles look like they're misbehaving.
+        if (dst->id && logged_targets_.insert(dst->id).second) {
+            log_line("target id=%llu name=%s class=%s prof=0x%08x elite=0x%08x",
+                     static_cast<unsigned long long>(dst->id),
+                     dst->name ? dst->name : "?",
+                     tt == TargetType::Gadget ? "Gadget" :
+                     tt == TargetType::Npc    ? "NPC" : "Player",
+                     dst->prof, dst->elite);
+        }
         if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
             tt == TargetType::Gadget) return;
         if (options().exclude_npcs.load(std::memory_order_relaxed) &&
@@ -496,6 +507,7 @@ void Tracker::reset_fight() {
         }
     }
     instid_to_id_.clear();
+    logged_targets_.clear();
     any_in_combat_ = false;
 }
 
@@ -542,6 +554,11 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
     uint64_t now = wall_now();
     for (const auto& [id, s] : agents_) {
         if (!s.is_player) continue;
+        // Drop squadmates that arc has marked as removed (e.g. left squad,
+        // changed instance) so old DPS rows from a previous squad don't
+        // linger after joining a new one. Self always stays so the local
+        // player's previous-fight stats remain visible OOC.
+        if (!s.present && !s.is_self) continue;
         // Combat time = active-damage window (first -> last damage event),
         // extending to now while the agent is still in combat. Matches
         // arc's Damage panel denominator.

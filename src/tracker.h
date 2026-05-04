@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "arcdps_api.h"
@@ -117,6 +118,10 @@ private:
     std::unordered_map<uintptr_t, AgentState>       agents_;
     std::unordered_map<uint16_t, uintptr_t>         instid_to_id_;
     std::unordered_map<uint32_t, std::string>       skill_names_;
+    // Targets we've already written a classification line for this fight.
+    // Cleared on reset_fight so a new pull re-logs (helps users diagnose
+    // why an "Exclude Gadgets" toggle is filtering their training golem).
+    std::unordered_set<uintptr_t>                   logged_targets_;
     bool                                            any_in_combat_   = false;
     bool                                            in_encounter_    = false;
 };
