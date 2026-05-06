@@ -210,14 +210,16 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 // this drain target_dmg_ leaks entries across long WvW
                 // sessions where reset_fight() never runs.
                 target_dmg_.erase(src->id);
+                downed_.erase(src->id);
             }
             break;
         case CBTS_CHANGEDOWN:
-            // Foe just went into downstate — credit every player who damaged
-            // it during this fight. damage_to_downed accumulates the dealt
-            // damage (matches arc's "down contribution"); downs_contributed
-            // counts distinct downs the player touched. Drained so a re-down
-            // of the same target doesn't re-credit prior damage.
+            // Down credit normally lands via the CBTR_DOWNED result code
+            // in on_damage — arc's realtime feed limits CHANGEDOWN delivery
+            // to squad members per the evtc spec, so non-squad foes never
+            // surface here. Kept as a fallback in case arc delivers a
+            // squad-self-down with pending attribution (rare; only matters
+            // if friendly fire ever populated target_dmg_ for a squadmate).
             if (src && src->id) {
                 auto tit = target_dmg_.find(src->id);
                 if (tit != target_dmg_.end()) {
@@ -483,12 +485,47 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     sk.hits_history.push_back({now, delta});
     if (sk.hits_history.size() > 1024) sk.hits_history.pop_front();
 
-    // Per-target damage attribution drains on CBTS_CHANGEDOWN of the
-    // target into damage_to_downed. dst is non-null in real damage events
-    // — guarded anyway since condi-tail / minion ticks can fire with
-    // partial event payloads.
+    // Per-target damage attribution. Drains on the downing hit
+    // (ev->result == CBTR_DOWNED) into damage_to_downed for each attacker.
+    // arc's realtime feed delivers CBTS_CHANGEDOWN/CHANGEDEAD only for
+    // squad members per the evtc spec, so enemy-player downs in WvW never
+    // surface as state-changes; the result-code path is the only realtime
+    // signal that works for non-squad targets. dst is non-null in real
+    // damage events — guarded anyway since condi-tail / minion ticks can
+    // fire with partial event payloads.
     if (dst && dst->id) {
         target_dmg_[dst->id][owner->id] += delta;
+
+        // Down detection. Two signals because arc's realtime delivery of
+        // CBTR_DOWNED on damage events isn't reliable for non-squad foes:
+        //   1) ev->result == CBTR_DOWNED — fires on the downing hit when
+        //      arc sets it. Catches the downing-hit damage in the credited
+        //      delta because the increment above ran first.
+        //   2) ev->is_offcycle 0->1 transition — every subsequent hit on
+        //      a downed foe carries is_offcycle != 0 per the evtc spec,
+        //      so the first such hit reveals a missed CBTR_DOWNED.
+        bool was_down = downed_[dst->id];
+        bool is_down  = ev->is_offcycle != 0;
+        bool downed_now = (ev->result == CBTR_DOWNED) ||
+                          (is_down && !was_down);
+        downed_[dst->id] = is_down;
+
+        if (downed_now) {
+            auto tit = target_dmg_.find(dst->id);
+            if (tit != target_dmg_.end()) {
+                for (const auto& [aid, dmg] : tit->second) {
+                    auto ait = agents_.find(aid);
+                    if (ait != agents_.end()) {
+                        ait->second.damage_to_downed   += dmg;
+                        ait->second.downs_contributed  += 1;
+                    }
+                }
+                target_dmg_.erase(tit);
+            }
+        } else if (ev->result == CBTR_KILLINGBLOW) {
+            target_dmg_.erase(dst->id);
+            downed_.erase(dst->id);
+        }
     }
 
     // Sample cumulative damage every ~500ms for the detail-window graph.
@@ -566,6 +603,7 @@ void Tracker::reset_fight() {
     instid_to_id_.clear();
     logged_targets_.clear();
     target_dmg_.clear();
+    downed_.clear();
     any_in_combat_ = false;
 }
 

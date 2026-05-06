@@ -87,22 +87,54 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags f =
             ImGuiTableFlags_RowBg |
-            ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
-            ImGuiTableFlags_Reorderable |
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
+            ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
         if (!settings().body_borders) f |= ImGuiTableFlags_NoBordersInBody;
         if (ImGui::BeginTable("downs", 4, f)) {
-            ImGui::TableSetupColumn("Prof",  ImGuiTableColumnFlags_WidthFixed,   22.0f);
-            ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Contrib", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-            ImGui::TableSetupColumn("Downs", ImGuiTableColumnFlags_WidthFixed,   44.0f);
+            ImGui::TableSetupColumn("Prof",
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_NoSort, 22.0f);
+            ImGui::TableSetupColumn("Name",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Contrib",
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending |
+                                    ImGuiTableColumnFlags_DefaultSort, 64.0f);
+            ImGui::TableSetupColumn("Downs",
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    44.0f);
             ImGui::TableHeadersRow();
+
+            // Sort by active spec — defaults to Contrib desc via DefaultSort
+            // flag above. Click the Contrib or Downs / Name header to switch.
+            int  sort_col = 2;
+            bool ascending = false;
+            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+                if (specs->SpecsCount > 0) {
+                    sort_col  = specs->Specs[0].ColumnIndex;
+                    ascending = specs->Specs[0].SortDirection ==
+                                ImGuiSortDirection_Ascending;
+                }
+            }
 
             g_sort_idx.resize(rows.size());
             for (size_t i = 0; i < rows.size(); ++i) g_sort_idx[i] = i;
             std::sort(g_sort_idx.begin(), g_sort_idx.end(),
-                [&rows](size_t a, size_t b) {
-                    return rows[a].damage_to_downed > rows[b].damage_to_downed;
+                [&rows, sort_col, ascending](size_t a, size_t b) {
+                    const auto& ra = rows[a];
+                    const auto& rb = rows[b];
+                    bool less;
+                    switch (sort_col) {
+                        case 1:  less = ra.name < rb.name; break;
+                        case 3:  less = ra.downs_contributed <
+                                        rb.downs_contributed; break;
+                        case 2:
+                        default: less = ra.damage_to_downed <
+                                        rb.damage_to_downed; break;
+                    }
+                    return ascending ? less : !less;
                 });
 
             for (size_t i : g_sort_idx) {

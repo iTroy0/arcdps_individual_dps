@@ -136,10 +136,18 @@ private:
     std::unordered_map<uint16_t, uintptr_t>         instid_to_id_;
     std::unordered_map<uint32_t, std::string>       skill_names_;
     // Per-foe damage attribution since fight start: target_id -> attacker_id
-    // -> damage. Drained on CBTS_CHANGEDOWN of the foe so attackers receive
+    // -> damage. Drained on the downing hit (CBTR_DOWNED result, or
+    // is_offcycle 0->1 transition fallback) so attackers receive
     // down-contribution credit, and re-down events don't double-count.
+    // arc's realtime feed delivers CHANGEDOWN/CHANGEDEAD only for squad
+    // members per the evtc spec, so non-squad foes can't be drained that way.
     std::unordered_map<uintptr_t, std::unordered_map<uintptr_t, uint64_t>>
                                                     target_dmg_;
+    // Per-target downed flag used to detect the 0->1 is_offcycle transition
+    // — the moment a foe enters downstate, any subsequent damage event on
+    // them carries is_offcycle == 1 per the evtc spec. Realtime-safe even
+    // for non-squad targets where CHANGEDOWN never fires.
+    std::unordered_map<uintptr_t, bool>             downed_;
     // Targets we've already written a classification line for this fight.
     // Cleared on reset_fight so a new pull re-logs (helps users diagnose
     // why an "Exclude Gadgets" toggle is filtering their training golem).
