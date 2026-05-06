@@ -184,7 +184,7 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
         }
     }
 
-    if (ev->is_statechange != CBTS_NONE) {
+    if (ev->is_statechange != CBTS_COMBAT) {
         on_statechange(ev, src, dst);
         return;
     }
@@ -234,6 +234,34 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 }
             }
             break;
+        case CBTS_BUFFREMOVE_ALL: {
+            // src=victim losing buff, dst=remover. Attribute the strip /
+            // cleanse to the remover (dst). is_buffremove carries the
+            // cbtbuffremove enum; CBTB_ALL is the actual single-action
+            // removal. CBTB_MANUAL is arc's per-stack synthetic expansion
+            // of the same removal — counting it would massively over-count.
+            if (ev->is_buffremove != CBTB_ALL) break;
+            if (!dst || !dst->id) break;
+            auto it = agents_.find(dst->id);
+            if (it == agents_.end() || !it->second.is_player) break;
+            if (src) {
+                auto tt = classify_target(src);
+                if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
+                    tt == TargetType::Gadget) break;
+                if (options().exclude_npcs.load(std::memory_order_relaxed) &&
+                    tt == TargetType::Npc) break;
+            }
+            // iff is from src's (victim's) perspective. A foe whose boon
+            // was just stripped sees the remover as a foe (IFF_FOE); an
+            // ally whose condi was just cleansed sees the remover as a
+            // friend (IFF_FRIEND).
+            if (ev->iff == IFF_FOE && is_boon(ev->skillid)) {
+                it->second.strip_count++;
+            } else if (ev->iff == IFF_FRIEND && is_condition(ev->skillid)) {
+                it->second.cleanse_count++;
+            }
+            break;
+        }
         case CBTS_SQCOMBATSTART:
             // Per-self semantics: do not wipe squadmates here. Each
             // player resets via their own CBTS_ENTERCOMBAT (or implicit
@@ -320,40 +348,13 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (it == skill_names_.end()) skill_names_.emplace(ev->skillid, skillname);
     }
 
-    // Strips/cleanses. Arcdps buff_remove semantics: src is the agent that
-    // LOST the buff, dst is the agent that caused the removal. To attribute
-    // the strip/cleanse to the remover (the player), we look up dst->id, not
-    // src->id. is_buffremove==1 (ALL) is the actual strip/cleanse event;
-    // ==2 fires per stack on natural expiry and would massively over-count.
-    // Runs before the iff==0 filter since cleanses are friend-on-friend
-    // events that the damage path drops.
-    if (ev->buff != 0 && ev->is_buffremove == 1 && dst && dst->id) {
-        auto it = agents_.find(dst->id);
-        if (it != agents_.end() && it->second.is_player) {
-            bool filtered = false;
-            if (src) {
-                auto tt = classify_target(src);
-                if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
-                    tt == TargetType::Gadget) filtered = true;
-                if (options().exclude_npcs.load(std::memory_order_relaxed) &&
-                    tt == TargetType::Npc) filtered = true;
-            }
-            if (!filtered) {
-                // iff is from src's (victim's) perspective. A foe whose boon
-                // was just stripped sees the remover as a foe (iff==1); an
-                // ally whose condi was just cleansed sees the remover as a
-                // friend (iff==0).
-                if (ev->iff == 1 && is_boon(ev->skillid)) {
-                    it->second.strip_count++;
-                } else if (ev->iff == 0 && is_condition(ev->skillid)) {
-                    it->second.cleanse_count++;
-                }
-            }
-        }
-        return;
-    }
+    // Strip/cleanse counting moved to the CBTS_BUFFREMOVE_ALL state-change
+    // path in on_statechange — newer arc emits buff-stack removals as
+    // dedicated state-changes (CBTS_BUFFREMOVE_SINGLE / _ALL) instead of
+    // packing them into combat events. A buff-tick condi-damage event
+    // still arrives here as CBTS_COMBAT with buff != 0.
 
-    if (ev->iff == 0) return;
+    if (ev->iff == IFF_FRIEND) return;
 
     if (dst) {
         auto tt = classify_target(dst);
