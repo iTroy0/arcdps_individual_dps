@@ -67,6 +67,7 @@ add_library(arcdps_individual_dps SHARED
     src/log.cpp
     src/icons.cpp
     src/settings.cpp
+    src/update.cpp
     res/icons.rc
 )
 
@@ -81,7 +82,7 @@ target_include_directories(arcdps_individual_dps PRIVATE
     ${stb_SOURCE_DIR}
 )
 
-target_link_libraries(arcdps_individual_dps PRIVATE imgui_static d3d11 dxgi)
+target_link_libraries(arcdps_individual_dps PRIVATE imgui_static d3d11 dxgi winhttp)
 
 if(MSVC)
     target_compile_options(arcdps_individual_dps PRIVATE

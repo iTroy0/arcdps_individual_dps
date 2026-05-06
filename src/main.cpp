@@ -10,6 +10,7 @@
 #include "icons.h"
 #include "log.h"
 #include "ui.h"
+#include "update.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -65,4 +66,11 @@ extern "C" __declspec(dllexport) void* get_init_addr(
 
 extern "C" __declspec(dllexport) void* get_release_addr() {
     return reinterpret_cast<void*>(&idps::mod_release);
+}
+
+// arcdps optional export: when non-null, arc free-libraries the plugin,
+// downloads the file at the returned URL (HTTPS, port 443 only), writes
+// it over the existing DLL, and re-loads the new module in-process.
+extern "C" __declspec(dllexport) const wchar_t* get_update_url() {
+    return idps::check_for_update(idps::version());
 }
