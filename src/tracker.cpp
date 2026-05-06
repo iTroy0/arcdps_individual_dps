@@ -205,6 +205,11 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             if (src && src->id) {
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) it->second.alive = false;
+                // Drop any pending damage attribution for this target.
+                // NPCs die without going through downstate, so without
+                // this drain target_dmg_ leaks entries across long WvW
+                // sessions where reset_fight() never runs.
+                target_dmg_.erase(src->id);
             }
             break;
         case CBTS_CHANGEDOWN:
