@@ -493,7 +493,14 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     // signal that works for non-squad targets. dst is non-null in real
     // damage events — guarded anyway since condi-tail / minion ticks can
     // fire with partial event payloads.
-    if (dst && dst->id) {
+    // Down contribution is player-vs-player only. NPCs (pets, minions,
+    // mesmer clones, jade mech) classify with elite == 0xFFFFFFFFu and
+    // would otherwise inflate down counts since some of them go through
+    // a real downstate. Players have elite != 0xFFFFFFFF per the evtc
+    // spec.
+    bool dst_is_player = dst && dst->id &&
+                         dst->elite != 0xFFFFFFFFu;
+    if (dst_is_player) {
         // Down detection. Two signals because arc's realtime delivery of
         // CBTR_DOWNED on damage events isn't reliable for non-squad foes:
         //   1) ev->result == CBTR_DOWNED — fires on the downing hit when
