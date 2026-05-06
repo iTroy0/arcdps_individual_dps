@@ -494,13 +494,10 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     // damage events — guarded anyway since condi-tail / minion ticks can
     // fire with partial event payloads.
     if (dst && dst->id) {
-        target_dmg_[dst->id][owner->id] += delta;
-
         // Down detection. Two signals because arc's realtime delivery of
         // CBTR_DOWNED on damage events isn't reliable for non-squad foes:
         //   1) ev->result == CBTR_DOWNED — fires on the downing hit when
-        //      arc sets it. Catches the downing-hit damage in the credited
-        //      delta because the increment above ran first.
+        //      arc sets it.
         //   2) ev->is_offcycle 0->1 transition — every subsequent hit on
         //      a downed foe carries is_offcycle != 0 per the evtc spec,
         //      so the first such hit reveals a missed CBTR_DOWNED.
@@ -508,6 +505,15 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         bool is_down  = ev->is_offcycle != 0;
         bool downed_now = (ev->result == CBTR_DOWNED) ||
                           (is_down && !was_down);
+
+        // Only accumulate damage while target is up. Cleave-on-downed
+        // (post-down hits before stomp) is excluded so a re-down credit
+        // doesn't include damage dealt while the foe was already lying
+        // down — strict "down contribution" semantics. Damage on rallied
+        // targets resumes counting because was_down flips back to false.
+        if (!was_down) {
+            target_dmg_[dst->id][owner->id] += delta;
+        }
         downed_[dst->id] = is_down;
 
         if (downed_now) {
