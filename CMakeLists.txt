@@ -60,6 +60,10 @@ add_library(arcdps_individual_dps SHARED
     src/combat.cpp
     src/tracker.cpp
     src/ui.cpp
+    src/ui_common.cpp
+    src/ui_detail.cpp
+    src/ui_support.cpp
+    src/ui_options.cpp
     src/log.cpp
     src/icons.cpp
     src/settings.cpp

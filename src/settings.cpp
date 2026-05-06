@@ -81,6 +81,7 @@ namespace {
         else if (k == "sort_reverse") s.sort_reverse = std::atoi(v.c_str()) != 0;
         else if (k == "cleanses_open") s.cleanses_open = std::atoi(v.c_str()) != 0;
         else if (k == "strips_open")   s.strips_open   = std::atoi(v.c_str()) != 0;
+        else if (k == "downs_open")    s.downs_open    = std::atoi(v.c_str()) != 0;
         else if (k == "highlight_self") s.highlight_self = std::atoi(v.c_str()) != 0;
         else if (k == "name_white")     s.name_white     = std::atoi(v.c_str()) != 0;
         else if (k == "self_name_gold") s.self_name_gold = std::atoi(v.c_str()) != 0;
@@ -170,6 +171,7 @@ void settings_save() {
     std::fprintf(f, "sort_reverse=%d\n",    s.sort_reverse ? 1 : 0);
     std::fprintf(f, "cleanses_open=%d\n",   s.cleanses_open ? 1 : 0);
     std::fprintf(f, "strips_open=%d\n",     s.strips_open   ? 1 : 0);
+    std::fprintf(f, "downs_open=%d\n",      s.downs_open    ? 1 : 0);
     std::fprintf(f, "highlight_self=%d\n",  s.highlight_self ? 1 : 0);
     std::fprintf(f, "name_white=%d\n",      s.name_white     ? 1 : 0);
     std::fprintf(f, "self_name_gold=%d\n",  s.self_name_gold ? 1 : 0);

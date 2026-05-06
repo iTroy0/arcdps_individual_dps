@@ -1,6 +1,7 @@
 #include "tracker.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <windows.h>
 
@@ -94,6 +95,15 @@ namespace {
         return TargetType::Gadget;
     }
 
+    // Special Forces Training Area golems are classified as Gadgets by
+    // arc, so "Exclude Gadgets" silently filters golem damage and breaks
+    // build testing. Whitelist by name so the toggle stays useful for
+    // real WvW gadgets (siege etc.) without dropping golem damage.
+    bool is_training_golem(const ag* a) {
+        if (!a || !a->name) return false;
+        return std::strstr(a->name, "Kitty Golem") != nullptr;
+    }
+
     // Arc stores player class info in dst on tracking-add, not src.
     void resolve_prof_elite(const ag* src, const ag* dst, uint32_t& prof, uint32_t& elite) {
         prof = 0; elite = 0;
@@ -112,13 +122,15 @@ namespace {
     }
 
     void reset_for_new_fight(AgentState& s) {
-        s.accumulated_ms     = 0;
-        s.damage_total       = 0;
-        s.first_damage_wall  = 0;
-        s.last_damage_wall   = 0;
-        s.strip_count        = 0;
-        s.cleanse_count      = 0;
-        s.alive              = true;
+        s.accumulated_ms      = 0;
+        s.damage_total        = 0;
+        s.first_damage_wall   = 0;
+        s.last_damage_wall    = 0;
+        s.strip_count         = 0;
+        s.cleanse_count       = 0;
+        s.damage_to_downed    = 0;
+        s.downs_contributed   = 0;
+        s.alive               = true;
         s.skills.clear();
         s.history.clear();
     }
@@ -193,6 +205,26 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             if (src && src->id) {
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) it->second.alive = false;
+            }
+            break;
+        case CBTS_CHANGEDOWN:
+            // Foe just went into downstate — credit every player who damaged
+            // it during this fight. damage_to_downed accumulates the dealt
+            // damage (matches arc's "down contribution"); downs_contributed
+            // counts distinct downs the player touched. Drained so a re-down
+            // of the same target doesn't re-credit prior damage.
+            if (src && src->id) {
+                auto tit = target_dmg_.find(src->id);
+                if (tit != target_dmg_.end()) {
+                    for (const auto& [aid, dmg] : tit->second) {
+                        auto ait = agents_.find(aid);
+                        if (ait != agents_.end()) {
+                            ait->second.damage_to_downed   += dmg;
+                            ait->second.downs_contributed  += 1;
+                        }
+                    }
+                    target_dmg_.erase(tit);
+                }
             }
             break;
         case CBTS_SQCOMBATSTART:
@@ -318,6 +350,11 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     if (dst) {
         auto tt = classify_target(dst);
+        // SFTA training golems classify as Gadget per arc, but mentally
+        // they're training NPCs — re-tag so Exclude Gadgets doesn't drop
+        // build-test damage and Exclude NPCs is the toggle that controls
+        // them.
+        if (is_training_golem(dst)) tt = TargetType::Npc;
         // Log each target's classification once per fight so users can
         // see whether their test golem is being treated as Gadget or NPC
         // when "Exclude X" toggles look like they're misbehaving.
@@ -435,6 +472,19 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     sk.hits   += 1;
     if (sk.first_hit_wall == 0) sk.first_hit_wall = now;
     sk.last_hit_wall = now;
+    // Per-skill hit timeline drives the spike overlay in the detail
+    // graph. Capped per-skill so heavy condi tickers (Burning, Bleed)
+    // can't blow memory on long fights.
+    sk.hits_history.push_back({now, delta});
+    if (sk.hits_history.size() > 1024) sk.hits_history.pop_front();
+
+    // Per-target damage attribution drains on CBTS_CHANGEDOWN of the
+    // target into damage_to_downed. dst is non-null in real damage events
+    // — guarded anyway since condi-tail / minion ticks can fire with
+    // partial event payloads.
+    if (dst && dst->id) {
+        target_dmg_[dst->id][owner->id] += delta;
+    }
 
     // Sample cumulative damage every ~500ms for the detail-window graph.
     // Deque pop_front is O(1) — vector::erase(begin) was O(n) and stalled
@@ -489,25 +539,28 @@ void Tracker::reset_fight() {
         if (!s.present && !s.is_self) {
             it = agents_.erase(it);
         } else {
-            s.accumulated_ms = 0;
-            s.damage_total   = 0;
+            s.accumulated_ms      = 0;
+            s.damage_total        = 0;
             s.in_combat_wall.reset();
-            s.first_damage_wall = 0;
-            s.last_damage_wall  = 0;
-            s.strip_count      = 0;
-            s.cleanse_count    = 0;
-            s.alive            = true;
+            s.first_damage_wall   = 0;
+            s.last_damage_wall    = 0;
+            s.strip_count         = 0;
+            s.cleanse_count       = 0;
+            s.damage_to_downed    = 0;
+            s.downs_contributed   = 0;
+            s.alive               = true;
             s.skills.clear();
             s.history.clear();
             // Drop the per-agent instid alongside the global map so
             // find_by_instid()'s linear fallback can't match a stale
             // binding after instids get recycled between fights.
-            s.instid           = 0;
+            s.instid              = 0;
             ++it;
         }
     }
     instid_to_id_.clear();
     logged_targets_.clear();
+    target_dmg_.clear();
     any_in_combat_ = false;
 }
 
@@ -538,6 +591,8 @@ void Tracker::detail(uintptr_t id, AgentDetail& out) const {
             sd.hits           = entry.hits;
             sd.first_hit_wall = entry.first_hit_wall;
             sd.last_hit_wall  = entry.last_hit_wall;
+            sd.hits_history.assign(entry.hits_history.begin(),
+                                   entry.hits_history.end());
             out.skills.push_back(std::move(sd));
         }
     }
@@ -576,6 +631,7 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
             s.id, s.name, s.prof, s.elite,
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
+            s.damage_to_downed, s.downs_contributed,
             s.in_combat_wall.has_value(),
             s.is_self,
         });

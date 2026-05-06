@@ -19,6 +19,7 @@ struct Settings {
 
     bool  cleanses_open   = false;
     bool  strips_open     = false;
+    bool  downs_open      = false;
 
     // Tints the self row's background so the local player stands out
     // against teammates without overriding profession color.
