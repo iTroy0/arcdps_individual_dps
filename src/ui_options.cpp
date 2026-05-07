@@ -91,7 +91,7 @@ void draw_options_controls() {
     }
 }
 
-void mod_options_end() {
+uintptr_t mod_options_end() {
     if (ImGui::CollapsingHeader("Individual DPS")) {
         auto& s = settings();
         bool open = s.window_open;
@@ -99,6 +99,7 @@ void mod_options_end() {
         draw_options_controls();
         ImGui::Text("v%s", version());
     }
+    return 0;
 }
 
 } // namespace idps

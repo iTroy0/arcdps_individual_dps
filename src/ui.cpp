@@ -73,11 +73,15 @@ void ui_init(ImGuiContext* ctx) {
     if (ctx) ImGui::SetCurrentContext(ctx);
 }
 
-void mod_imgui(uint32_t not_charsel_or_loading, uint32_t hide_if_combat_or_ooc) {
-    if (!not_charsel_or_loading || !hide_if_combat_or_ooc) return;
+uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_or_ooc*/) {
+    // Second flag's polarity (1=hide vs 1=render) isn't documented clearly
+    // in the canonical API and arc's runtime convention can crash plugins
+    // that get it wrong. Keep the original visibility semantics (gate on
+    // the first flag only) until the convention is confirmed.
+    if (!not_charsel_or_loading) return 0;
     icons_ensure_loaded();
     auto& s = settings();
-    if (!s.window_open) return;
+    if (!s.window_open) return 0;
 
     static bool   prev_rel = false;
     static ImVec2 prev_ds(0.0f, 0.0f);
@@ -349,6 +353,7 @@ void mod_imgui(uint32_t not_charsel_or_loading, uint32_t hide_if_combat_or_ooc) 
     draw_detail_window();
 
     prune_dps_cache(g_rows);
+    return 0;
 }
 
 } // namespace idps

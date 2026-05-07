@@ -7,7 +7,7 @@ struct arcdps_exports;
 namespace idps {
 
 arcdps_exports* mod_init();
-void            mod_release();
+uintptr_t       mod_release();
 
 // Centralized version string — used by exports table AND options panel.
 const char* version();
