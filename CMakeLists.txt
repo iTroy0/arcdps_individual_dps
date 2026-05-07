@@ -50,9 +50,10 @@ add_library(imgui_static STATIC
     ${_imgui_src}/imgui_widgets.cpp
 )
 target_include_directories(imgui_static PUBLIC ${_imgui_src})
-target_compile_definitions(imgui_static PUBLIC
-    IMGUI_DISABLE_OBSOLETE_FUNCTIONS
-)
+# Do NOT set IMGUI_DISABLE_OBSOLETE_FUNCTIONS — it removes ~28 bytes of
+# obsolete fields from ImGuiIO, mismatching arc's layout and crashing
+# the shared context. Keep zero custom defines so the plugin's struct
+# layout matches whatever arc compiled against.
 
 add_library(arcdps_individual_dps SHARED
     src/main.cpp

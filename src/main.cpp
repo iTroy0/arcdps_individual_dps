@@ -33,13 +33,12 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     void* freefn,
     uint32_t imguiversion) {
     idps::log_init();
-    // arcdps passes its IMGUI_VERSION_NUM here (slot was previously directx
-    // version per canonical arcdps API). Log both so a mismatch with our
-    // own pin is debuggable from the log alone.
+    // Log arc's IMGUI_VERSION_NUM (7th arg, formerly d3d version) vs our
+    // own pin so any future mismatch surfaces in the log directly.
     idps::log_line("get_init_addr imgui_arc=%u imgui_self=%u",
                    imguiversion, IMGUI_VERSION_NUM);
-    // Shared-context ImGui: set allocator BEFORE SetCurrentContext so the
-    // extension's ImGui copy allocates through the same arena as arcdps.
+    // Set allocator before SetCurrentContext so plugin's ImGui copy
+    // allocates through arcdps's arena.
     if (mallocfn && freefn) {
         using alloc_fn = void* (*)(size_t sz, void* user_data);
         using free_fn  = void  (*)(void* ptr, void* user_data);
