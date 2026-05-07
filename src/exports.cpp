@@ -49,7 +49,7 @@ arcdps_exports* mod_init() {
     return &g_exports;
 }
 
-uintptr_t mod_release() {
+void mod_release() {
     // Snapshot UI options into settings before persisting.
     auto& s = settings();
     s.exclude_npcs    = options().exclude_npcs.load(std::memory_order_relaxed);
@@ -59,7 +59,6 @@ uintptr_t mod_release() {
     log_line("mod_release");
     icons_shutdown();
     log_shutdown();
-    return 0;
 }
 
 } // namespace idps

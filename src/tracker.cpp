@@ -85,23 +85,14 @@ namespace {
 
     // Target-type classification per deltaconnected evtc README:
     //   Player: elite != 0xFFFFFFFF
-    //   NPC:    elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) == 0xFFFF0000
-    //   Gadget: elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) != 0xFFFF0000
+    //   Gadget: elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) == 0xFFFF0000
+    //   NPC:    elite == 0xFFFFFFFF AND (prof & 0xFFFF0000) != 0xFFFF0000
     enum class TargetType { Player, Npc, Gadget };
 
     TargetType classify_target(const ag* dst) {
         if (dst->elite != 0xFFFFFFFFu) return TargetType::Player;
-        if ((dst->prof & 0xFFFF0000u) == 0xFFFF0000u) return TargetType::Npc;
-        return TargetType::Gadget;
-    }
-
-    // Special Forces Training Area golems are classified as Gadgets by
-    // arc, so "Exclude Gadgets" silently filters golem damage and breaks
-    // build testing. Whitelist by name so the toggle stays useful for
-    // real WvW gadgets (siege etc.) without dropping golem damage.
-    bool is_training_golem(const ag* a) {
-        if (!a || !a->name) return false;
-        return std::strstr(a->name, "Kitty Golem") != nullptr;
+        if ((dst->prof & 0xFFFF0000u) == 0xFFFF0000u) return TargetType::Gadget;
+        return TargetType::Npc;
     }
 
     // Arc stores player class info in dst on tracking-add, not src.
@@ -358,11 +349,6 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     if (dst) {
         auto tt = classify_target(dst);
-        // SFTA training golems classify as Gadget per arc, but mentally
-        // they're training NPCs — re-tag so Exclude Gadgets doesn't drop
-        // build-test damage and Exclude NPCs is the toggle that controls
-        // them.
-        if (is_training_golem(dst)) tt = TargetType::Npc;
         // Log each target's classification once per fight so users can
         // see whether their test golem is being treated as Gadget or NPC
         // when "Exclude X" toggles look like they're misbehaving.
@@ -525,6 +511,12 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         downed_[dst->id] = is_down;
 
         if (downed_now) {
+            // Sticky-set the downed flag so subsequent cleave-on-downed
+            // events (is_offcycle=1) hit the was_down guard and don't
+            // re-accumulate or re-trigger the drain. Necessary when arc
+            // fires CBTR_DOWNED eagerly with is_offcycle=0 — line above
+            // would otherwise leave the flag clear after drain.
+            downed_[dst->id] = true;
             auto tit = target_dmg_.find(dst->id);
             if (tit != target_dmg_.end()) {
                 for (const auto& [aid, dmg] : tit->second) {

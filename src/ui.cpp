@@ -73,11 +73,11 @@ void ui_init(ImGuiContext* ctx) {
     if (ctx) ImGui::SetCurrentContext(ctx);
 }
 
-uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
-    if (!not_charsel_or_loading) return 0;
+void mod_imgui(uint32_t not_charsel_or_loading, uint32_t hide_if_combat_or_ooc) {
+    if (!not_charsel_or_loading || !hide_if_combat_or_ooc) return;
     icons_ensure_loaded();
     auto& s = settings();
-    if (!s.window_open) return 0;
+    if (!s.window_open) return;
 
     static bool   prev_rel = false;
     static ImVec2 prev_ds(0.0f, 0.0f);
@@ -349,7 +349,6 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
     draw_detail_window();
 
     prune_dps_cache(g_rows);
-    return 0;
 }
 
 } // namespace idps
