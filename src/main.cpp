@@ -31,8 +31,13 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     HANDLE /*arcdll*/,
     void* mallocfn,
     void* freefn,
-    uint32_t d3dversion) {
+    uint32_t imguiversion) {
     idps::log_init();
+    // arcdps passes its IMGUI_VERSION_NUM here (slot was previously directx
+    // version per canonical arcdps API). Log both so a mismatch with our
+    // own pin is debuggable from the log alone.
+    idps::log_line("get_init_addr imgui_arc=%u imgui_self=%u",
+                   imguiversion, IMGUI_VERSION_NUM);
     // Shared-context ImGui: set allocator BEFORE SetCurrentContext so the
     // extension's ImGui copy allocates through the same arena as arcdps.
     if (mallocfn && freefn) {
@@ -46,7 +51,7 @@ extern "C" __declspec(dllexport) void* get_init_addr(
 
     // arcdps passes id3dptr either as ID3D11Device* (older) or IDXGISwapChain*
     // (newer) — probe via QueryInterface.
-    if (id3dptr && d3dversion == 11) {
+    if (id3dptr) {
         auto* unk = static_cast<IUnknown*>(id3dptr);
         ComPtr<ID3D11Device> device;
         if (SUCCEEDED(unk->QueryInterface(IID_PPV_ARGS(&device)))) {
