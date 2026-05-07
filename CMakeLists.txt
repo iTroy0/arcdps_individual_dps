@@ -30,7 +30,7 @@ else()
     FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
-        GIT_TAG        v1.80
+        GIT_TAG        v1.92.7
     )
     FetchContent_MakeAvailable(imgui)
     set(_imgui_src "${imgui_SOURCE_DIR}")

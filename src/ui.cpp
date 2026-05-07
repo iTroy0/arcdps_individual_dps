@@ -172,13 +172,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                     static bool init = false;
                     if (tbl->ColumnsCount >= 6) {
                         if (!init || show_dps    != prev_dps)
-                            tbl->Columns[2].IsEnabledNextFrame = show_dps;
+                            tbl->Columns[2].IsUserEnabledNextFrame = show_dps;
                         if (!init || show_dmg    != prev_dmg)
-                            tbl->Columns[3].IsEnabledNextFrame = show_dmg;
+                            tbl->Columns[3].IsUserEnabledNextFrame = show_dmg;
                         if (!init || show_combat != prev_combat)
-                            tbl->Columns[4].IsEnabledNextFrame = show_combat;
+                            tbl->Columns[4].IsUserEnabledNextFrame = show_combat;
                         if (!init || show_pct    != prev_pct)
-                            tbl->Columns[5].IsEnabledNextFrame = show_pct;
+                            tbl->Columns[5].IsUserEnabledNextFrame = show_pct;
                         prev_dps    = show_dps;
                         prev_dmg    = show_dmg;
                         prev_combat = show_combat;
@@ -272,7 +272,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
 
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
                     align_icon_to_text();
-                    ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
+                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
                 } else {
                     ImGui::TextUnformatted(prof_short(r.prof));
                 }
@@ -307,7 +307,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading) {
                     if (ImGui::Selectable(r.name.c_str(),
                                           selected_agent() == r.id && s.detail_open,
                                           ImGuiSelectableFlags_SpanAllColumns |
-                                          ImGuiSelectableFlags_AllowItemOverlap)) {
+                                          ImGuiSelectableFlags_AllowOverlap)) {
                         set_selected_agent(r.id);
                         s.detail_open = true;
                     }

@@ -53,7 +53,7 @@ void draw_detail_window() {
     if (ImGui::Begin(title, &open)) {
         // ESC closes the detail window when it has keyboard focus.
         if (ImGui::IsWindowFocused() &&
-            ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             open = false;
         }
         ImVec2 dpos = ImGui::GetWindowPos();
@@ -297,7 +297,7 @@ void draw_detail_window() {
                 std::snprintf(id_lbl, sizeof(id_lbl), "%d##rk", rank);
                 if (ImGui::Selectable(id_lbl, is_sel,
                                       ImGuiSelectableFlags_SpanAllColumns |
-                                      ImGuiSelectableFlags_AllowItemOverlap)) {
+                                      ImGuiSelectableFlags_AllowOverlap)) {
                     g_selected_skill = is_sel ? 0u : sk.skill_id;
                 }
                 ImGui::PopID();

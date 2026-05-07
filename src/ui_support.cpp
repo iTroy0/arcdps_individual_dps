@@ -52,7 +52,7 @@ void draw_support_window(const char* title, bool* open,
                 ImGui::TableNextColumn();
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
                     align_icon_to_text();
-                    ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
+                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
                 } else {
                     ImGui::TextUnformatted(prof_short(r.prof));
                 }
@@ -143,7 +143,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                 ImGui::TableNextColumn();
                 if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
                     align_icon_to_text();
-                    ImGui::Image(reinterpret_cast<ImTextureID>(tex), ImVec2(14, 14));
+                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
                 } else {
                     ImGui::TextUnformatted(prof_short(r.prof));
                 }
