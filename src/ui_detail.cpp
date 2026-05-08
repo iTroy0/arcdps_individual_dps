@@ -28,9 +28,27 @@ void      set_selected_agent(uintptr_t id) {
 }
 uintptr_t selected_agent()                 { return g_selected_agent; }
 
+// ESC handler kept for compatibility with the wndproc-callback path —
+// not currently wired (returning 0 from arc's wnd_nofilter ate every
+// non-ESC message and broke clicks in-game). The ImGui-side ESC check
+// at the top of draw_detail_window handles dismissal instead.
+bool consume_esc_for_detail() {
+    auto& s = settings();
+    if (s.detail_open && g_selected_agent != 0) {
+        s.detail_open = false;
+        return true;
+    }
+    return false;
+}
+
 void draw_detail_window() {
     auto& s = settings();
     if (!s.detail_open || g_selected_agent == 0) return;
+
+    // ESC dismissal is handled in mod_wnd_nofilter (exports.cpp) via
+    // consume_esc_for_detail(). Arc grabs ESC at the keybind layer
+    // before forwarding to ImGui, so ImGui::IsKeyPressed never fires
+    // here.
     tracker().detail(g_selected_agent, g_detail);
     const auto& d = g_detail;
     if (d.name.empty()) {
@@ -51,18 +69,9 @@ void draw_detail_window() {
 
     bool open = s.detail_open;
     if (ImGui::Begin(title, &open)) {
-        // ESC closes the detail window when the window is focused OR
-        // hovered. The hover branch fixes the common case of hovering
-        // the graph (which sits behind an InvisibleButton and steals
-        // window focus on click) and pressing ESC — the original
-        // focus-only check left users unable to dismiss the window
-        // after interacting with the graph.
-        bool dismissable =
-            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
-            ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
-        if (dismissable && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            open = false;
-        }
+        // ESC dismissal is handled in mod_wnd_filter (exports.cpp) via
+        // consume_esc_for_detail(), since arc swallows ESC at the
+        // wndproc layer before ImGui::IsKeyPressed sees it.
         ImVec2 dpos = ImGui::GetWindowPos();
         ImVec2 dsiz = ImGui::GetWindowSize();
         capture_window_pos(dpos, s.detail_x, s.detail_y,
