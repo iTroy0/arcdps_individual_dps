@@ -105,7 +105,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
 
         if (ImGui::BeginPopupContextWindow("idps_ctx",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-            draw_options_controls();
+            draw_popup_settings();
             ImGui::Separator();
             if (ImGui::Button("Reset fight")) {
                 tracker().reset_fight();

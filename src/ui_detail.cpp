@@ -51,9 +51,16 @@ void draw_detail_window() {
 
     bool open = s.detail_open;
     if (ImGui::Begin(title, &open)) {
-        // ESC closes the detail window when it has keyboard focus.
-        if (ImGui::IsWindowFocused() &&
-            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        // ESC closes the detail window when the window is focused OR
+        // hovered. The hover branch fixes the common case of hovering
+        // the graph (which sits behind an InvisibleButton and steals
+        // window focus on click) and pressing ESC — the original
+        // focus-only check left users unable to dismiss the window
+        // after interacting with the graph.
+        bool dismissable =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
+        if (dismissable && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             open = false;
         }
         ImVec2 dpos = ImGui::GetWindowPos();
