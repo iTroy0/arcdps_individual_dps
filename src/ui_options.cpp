@@ -155,6 +155,9 @@ void draw_popup_settings() {
 uintptr_t mod_options_end() {
     if (ImGui::CollapsingHeader("Individual DPS")) {
         auto& s = settings();
+        ImGui::Text("v%s", version());
+        ImGui::Separator();
+
         bool open = s.window_open;
         if (ImGui::Checkbox("Show window", &open)) s.window_open = open;
 
@@ -164,8 +167,6 @@ uintptr_t mod_options_end() {
         if (ImGui::Button("Reset to defaults")) reset_to_defaults();
         item_tooltip("Restore appearance / filter / layout defaults. "
                      "Window positions and sizes are preserved.");
-        ImGui::SameLine();
-        ImGui::TextDisabled("v%s", version());
     }
     return 0;
 }
