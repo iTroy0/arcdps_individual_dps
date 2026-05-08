@@ -488,15 +488,23 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     bool dst_is_player = dst && dst->id &&
                          dst->elite != 0xFFFFFFFFu;
     if (dst_is_player) {
-        // Down detection. Two signals because arc's realtime delivery of
-        // CBTR_DOWNED on damage events isn't reliable for non-squad foes:
-        //   1) ev->result == CBTR_DOWNED — fires on the downing hit when
-        //      arc sets it.
-        //   2) ev->is_offcycle 0->1 transition — every subsequent hit on
-        //      a downed foe carries is_offcycle != 0 per the evtc spec,
-        //      so the first such hit reveals a missed CBTR_DOWNED.
-        bool was_down = downed_[dst->id];
-        bool is_down  = ev->is_offcycle != 0;
+        // Down detection. ev->is_offcycle has DIFFERENT semantics for
+        // strike vs buff(condi) events per the evtc spec:
+        //   - strike (ev->buff == 0): is_offcycle == 1 means the hit
+        //     landed on a downed target (cleave-on-downed signal).
+        //   - condi tick (ev->buff != 0): is_offcycle == 1 means the
+        //     tick was off-cycle (e.g. stack expired and was reapplied),
+        //     completely unrelated to downstate.
+        // Treating condi off-cycle ticks as down-state signals would
+        // false-fire downed_now on upstate foes every time a Burn/Bleed
+        // stack rebuilt — credit fires on phantom "downs", inflating
+        // downs_contributed massively for condi specs. Hence the
+        // is_strike gate on the is_offcycle path.
+        // CBTR_DOWNED on the result code remains valid for both kinds —
+        // it always marks the actual downing hit when arc sets it.
+        bool was_down  = downed_[dst->id];
+        bool is_strike = (ev->buff == 0);
+        bool is_down   = is_strike && (ev->is_offcycle != 0);
         bool downed_now = (ev->result == CBTR_DOWNED) ||
                           (is_down && !was_down);
 
@@ -504,18 +512,24 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         // (post-down hits before stomp) is excluded so a re-down credit
         // doesn't include damage dealt while the foe was already lying
         // down — strict "down contribution" semantics. Damage on rallied
-        // targets resumes counting because was_down flips back to false.
+        // targets resumes counting because was_down flips back to false
+        // on the next strike to an upstate foe.
         if (!was_down) {
             target_dmg_[dst->id][owner->id] += delta;
         }
-        downed_[dst->id] = is_down;
+        // Only strike events drive the up/down flag — condi ticks have
+        // unrelated is_offcycle meaning (see comment above) and would
+        // randomly toggle the flag if allowed to write it.
+        if (is_strike) {
+            downed_[dst->id] = is_down;
+        }
 
         if (downed_now) {
             // Sticky-set the downed flag so subsequent cleave-on-downed
-            // events (is_offcycle=1) hit the was_down guard and don't
-            // re-accumulate or re-trigger the drain. Necessary when arc
-            // fires CBTR_DOWNED eagerly with is_offcycle=0 — line above
-            // would otherwise leave the flag clear after drain.
+            // events hit the was_down guard and don't re-accumulate or
+            // re-trigger the drain. Necessary when arc fires CBTR_DOWNED
+            // eagerly with is_offcycle=0 — the line above would otherwise
+            // leave the flag clear after drain.
             downed_[dst->id] = true;
             auto tit = target_dmg_.find(dst->id);
             if (tit != target_dmg_.end()) {
