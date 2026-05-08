@@ -102,9 +102,8 @@ void draw_layout_section() {
                  "resolution changes or monitor swaps.");
 }
 
-// Restore non-geometry settings to struct defaults. Window positions /
-// sizes are intentionally preserved so a "reset" doesn't yank the user's
-// carefully-placed overlay back to (0,0).
+// Window positions / sizes are intentionally preserved so a reset doesn't
+// yank the user's carefully-placed overlay back to (0,0).
 void reset_to_defaults() {
     Settings def{};
     auto& s = settings();
@@ -126,10 +125,6 @@ void reset_to_defaults() {
                                     std::memory_order_relaxed);
 }
 
-// Emit the four section headers in a fixed order. default_open=true is
-// used by the right-click popup so all controls are visible immediately;
-// arc's options panel passes false to keep the panel compact on first
-// open and let the user expand on demand.
 void draw_settings_sections(bool default_open) {
     int flags = default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0;
     if (ImGui::CollapsingHeader("Appearance##idps", flags)) {

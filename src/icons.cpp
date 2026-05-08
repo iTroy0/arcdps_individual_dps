@@ -63,14 +63,13 @@ namespace {
         return got == bytes.size();
     }
 
-    // Maps a filename stem to the numeric RCDATA id assigned in res/icons.rc.
     WORD resource_id_for(const char* stem) {
-        // Core: "001".."009" -> 1..9
+        // "001".."009" -> 1..9
         if (std::strlen(stem) == 3 && stem[0] == '0' && stem[1] == '0' &&
             stem[2] >= '1' && stem[2] <= '9') {
             return static_cast<WORD>(stem[2] - '0');
         }
-        // Elite: "e<prof><0><spec>" with prof 1..9, spec 1..4
+        // "e<prof><0><spec>" with prof 1..9, spec 1..4
         if (std::strlen(stem) == 4 && (stem[0] == 'e' || stem[0] == 'E') &&
             stem[1] >= '1' && stem[1] <= '9' && stem[2] == '0' &&
             stem[3] >= '1' && stem[3] <= '4') {

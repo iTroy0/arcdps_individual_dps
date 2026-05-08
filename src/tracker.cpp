@@ -22,7 +22,7 @@ Options& options() {
 namespace {
     uint64_t wall_now() { return GetTickCount64(); }
 
-    // Boons we count for "strips". Sorted ascending → binary_search.
+    // Sorted ascending for binary_search.
     constexpr uint32_t kBoonIds[] = {
           717, // Protection
           718, // Regeneration
@@ -38,7 +38,7 @@ namespace {
         30328, // Alacrity
     };
 
-    // Conditions we count for "cleanses". Sorted ascending → binary_search.
+    // Sorted ascending for binary_search.
     constexpr uint32_t kConditionIds[] = {
           720, // Blind
           721, // Crippled
@@ -67,17 +67,16 @@ namespace {
     bool looks_like_player(const ag* a, const ag* dst = nullptr) {
         if (!a) return false;
         if (a->self) return true;
-        // arcdps populates dst->self for local player tracking-add.
+        // arcdps populates dst->self for the local player's tracking-add.
         if (dst && dst->self) return true;
-        // Remote player tracking-add: dst->name is an account name starting
-        // with ':' (e.g. ":Troy.4370"). Minion/effect events have null dst.
+        // Remote player tracking-add: dst->name is an account starting with
+        // ':' (e.g. ":Troy.4370"). Minion/effect events have null dst.
         if (dst && dst->name && dst->name[0] == ':') return true;
         return false;
     }
 
-    // Heuristic for state-only events (no dst) where we still want to
-    // recognize a squadmate. Player profs are 1..9 and elite != 0xFFFFFFFF
-    // (which marks NPCs).
+    // For state-only events (no dst). Player profs are 1..9 and elite !=
+    // 0xFFFFFFFF (which marks NPCs).
     bool prof_looks_like_player(const ag* a) {
         if (!a) return false;
         return a->prof >= 1 && a->prof <= 9 && a->elite != 0xFFFFFFFFu;
@@ -95,7 +94,7 @@ namespace {
         return TargetType::Npc;
     }
 
-    // Arc stores player class info in dst on tracking-add, not src.
+    // On tracking-add arc puts player class info in dst, not src.
     void resolve_prof_elite(const ag* src, const ag* dst, uint32_t& prof, uint32_t& elite) {
         prof = 0; elite = 0;
         if (dst && dst->prof >= 1 && dst->prof <= 9) {
@@ -150,8 +149,8 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                     instid_to_id_[s.instid] = src->id;
                 }
             } else if (src->elite == 0xFFFFFFFFu) {
-                // Agent removed — keep state for display until fight reset,
-                // but drop the instid mapping so new instids can rebind.
+                // Agent removed: keep state until fight reset, but drop the
+                // instid mapping so new instids can rebind.
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) {
                     instid_to_id_.erase(it->second.instid);
@@ -162,9 +161,8 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
         return;
     }
 
-    // Refresh prof/elite on any event carrying updated class info. Arc does
-    // not always re-fire tracking-add after a build/spec swap, but damage
-    // and state-change events usually carry the current prof/elite.
+    // Arc doesn't always re-fire tracking-add after a build/spec swap, but
+    // damage and state-change events usually carry current prof/elite.
     if (src && src->id) {
         auto it = agents_.find(src->id);
         if (it != agents_.end() && it->second.is_player) {
@@ -196,21 +194,19 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             if (src && src->id) {
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) it->second.alive = false;
-                // Drop any pending damage attribution for this target.
-                // NPCs die without going through downstate, so without
-                // this drain target_dmg_ leaks entries across long WvW
-                // sessions where reset_fight() never runs.
+                // NPCs die without going through downstate; without this
+                // drop, target_dmg_ leaks across long WvW sessions where
+                // reset_fight() never runs.
                 target_dmg_.erase(src->id);
                 downed_.erase(src->id);
             }
             break;
         case CBTS_CHANGEDOWN:
-            // Down credit normally lands via the CBTR_DOWNED result code
-            // in on_damage — arc's realtime feed limits CHANGEDOWN delivery
-            // to squad members per the evtc spec, so non-squad foes never
-            // surface here. Kept as a fallback in case arc delivers a
-            // squad-self-down with pending attribution (rare; only matters
-            // if friendly fire ever populated target_dmg_ for a squadmate).
+            // Down credit normally lands via CBTR_DOWNED in on_damage —
+            // arc's realtime feed delivers CHANGEDOWN only for squad members
+            // per the evtc spec, so non-squad foes never surface here. Kept
+            // for the rare squad-self-down case where target_dmg_ has
+            // pending attribution from friendly fire.
             if (src && src->id) {
                 auto tit = target_dmg_.find(src->id);
                 if (tit != target_dmg_.end()) {
@@ -226,11 +222,9 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             }
             break;
         case CBTS_BUFFREMOVE_ALL: {
-            // src=victim losing buff, dst=remover. Attribute the strip /
-            // cleanse to the remover (dst). is_buffremove carries the
-            // cbtbuffremove enum; CBTB_ALL is the actual single-action
-            // removal. CBTB_MANUAL is arc's per-stack synthetic expansion
-            // of the same removal — counting it would massively over-count.
+            // src=victim losing buff, dst=remover. CBTB_ALL is the single-
+            // action removal; CBTB_MANUAL etc. are per-stack synthetic
+            // expansions of the same removal and would massively over-count.
             if (ev->is_buffremove != CBTB_ALL) break;
             if (!dst || !dst->id) break;
             auto it = agents_.find(dst->id);
@@ -242,10 +236,8 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 if (options().exclude_npcs.load(std::memory_order_relaxed) &&
                     tt == TargetType::Npc) break;
             }
-            // iff is from src's (victim's) perspective. A foe whose boon
-            // was just stripped sees the remover as a foe (IFF_FOE); an
-            // ally whose condi was just cleansed sees the remover as a
-            // friend (IFF_FRIEND).
+            // iff is from src's (victim's) perspective: a stripped foe
+            // sees the remover as IFF_FOE; a cleansed ally sees IFF_FRIEND.
             if (ev->iff == IFF_FOE && is_boon(ev->skillid)) {
                 it->second.strip_count++;
             } else if (ev->iff == IFF_FRIEND && is_condition(ev->skillid)) {
@@ -254,13 +246,24 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             break;
         }
         case CBTS_SQCOMBATSTART:
-            // Per-self semantics: do not wipe squadmates here. Each
-            // player resets via their own CBTS_ENTERCOMBAT (or implicit
-            // enter on first credited damage). This keeps OOC players'
-            // previous fight stats visible until they themselves engage,
-            // so a squadmate's pull cannot reset rows for people who are
-            // not yet in combat.
+            // Per-self semantics: do not wipe squadmates here. Each player
+            // resets via their own CBTS_ENTERCOMBAT (or implicit-enter on
+            // first credited damage), so a squadmate's pull cannot reset
+            // rows for people not yet in combat.
             in_encounter_ = true;
+            break;
+        case CBTS_MAPCHANGE:
+            // Squadmates may stay in the squad but leave tracking range
+            // (e.g. EBG squad still listed after moving to Armistice).
+            // Drop them from snapshot() and clear instid bindings so fresh
+            // tracking-add on the new map re-registers cleanly. Self is
+            // preserved so previous-fight stats remain visible.
+            for (auto& [id, agent] : agents_) {
+                if (agent.is_self) continue;
+                instid_to_id_.erase(agent.instid);
+                agent.instid  = 0;
+                agent.present = false;
+            }
             break;
         case CBTS_SQCOMBATEND:
             for (auto& [id, s] : agents_) {
@@ -283,9 +286,8 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
     if (!src || !src->id) return;
     auto* s = touch_agent(src);
     if (!s) {
-        // Squadmate ENTERCOMBAT before tracking-add — register lazily.
-        // No dst is passed for state-changes, so we fall back to a prof-only
-        // heuristic. Anything that doesn't look like a player is dropped.
+        // Squadmate ENTERCOMBAT before tracking-add — lazy-register. No dst
+        // is passed for state-changes, so use a prof-only heuristic.
         if (prof_looks_like_player(src)) {
             auto& as = agents_[src->id];
             as.id        = src->id;
@@ -300,8 +302,8 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
     if (!s) return;
 
     if (!s->in_combat_wall) {
-        // Per-self fight reset: squadmate combat state does not dilute
-        // this player's stats.
+        // Per-self reset: squadmate combat state does not dilute this
+        // player's stats.
         if (has_fight_state(*s)) reset_for_new_fight(*s);
         s->in_combat_wall = wall_now();
     }
@@ -339,19 +341,12 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (it == skill_names_.end()) skill_names_.emplace(ev->skillid, skillname);
     }
 
-    // Strip/cleanse counting moved to the CBTS_BUFFREMOVE_ALL state-change
-    // path in on_statechange — newer arc emits buff-stack removals as
-    // dedicated state-changes (CBTS_BUFFREMOVE_SINGLE / _ALL) instead of
-    // packing them into combat events. A buff-tick condi-damage event
-    // still arrives here as CBTS_COMBAT with buff != 0.
-
     if (ev->iff == IFF_FRIEND) return;
 
     if (dst) {
         auto tt = classify_target(dst);
-        // Log each target's classification once per fight so users can
-        // see whether their test golem is being treated as Gadget or NPC
-        // when "Exclude X" toggles look like they're misbehaving.
+        // Log each target once per fight so users can see whether their
+        // test golem is treated as Gadget or NPC vs the Exclude toggles.
         if (dst->id && logged_targets_.insert(dst->id).second) {
             log_line("target id=%llu name=%s class=%s prof=0x%08x elite=0x%08x",
                      static_cast<unsigned long long>(dst->id),
@@ -367,11 +362,10 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     }
 
     // Lazy-register self on first damage — in solo play arc may never fire
-    // a tracking-add for the local player on `combat`, only on `combat_local`
-    // damage events where src->self == 1. Seed the instid mapping here too so
-    // pet/minion attribution via src_master_instid resolves on first hit.
-    // Guard with the same player-prof heuristic used elsewhere so a
-    // self-marked NPC entity (boss-disguise, gizmo, mount) cannot create a
+    // tracking-add on `combat`, only on `combat_local` damage events with
+    // src->self == 1. Seeds the instid map so pet/minion attribution via
+    // src_master_instid resolves on the first hit. Prof-guarded so a
+    // self-marked NPC (boss-disguise, gizmo, mount) cannot create a
     // malformed AgentState with elite == 0xFFFFFFFFu.
     if (src->self && src->id && prof_looks_like_player(src)) {
         auto& s = agents_[src->id];
@@ -404,9 +398,9 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     uint64_t delta = 0;
     if (ev->buff == 0) {
-        // Strike damage. Positive value only — negative strikes in arc's
-        // post-2026-04-14 feed represent barrier-absorbed / invulnerable
-        // hits that arc itself does not count toward DPS.
+        // Strike. Positive value only — arc's post-2026-04-14 feed encodes
+        // barrier-absorbed / invulnerable hits as negatives, which arc
+        // itself does not count toward DPS.
         switch (ev->result) {
             case CBTR_BLOCK:
             case CBTR_EVADE:
@@ -419,7 +413,7 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                 break;
         }
     } else {
-        // Buff (condition) damage tick. Skip buff-application/removal events.
+        // Condition tick. Skip buff-application/removal events.
         if (ev->buff_dmg > 0 && ev->is_buffremove == 0) {
             delta = static_cast<uint64_t>(ev->buff_dmg);
         }
@@ -429,26 +423,24 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     if (delta == 0) return;
 
     uint64_t now = wall_now();
-    // Implicit-enter only when arc skipped CBTS_ENTERCOMBAT for the local
-    // player. Restricted to (a) self as the literal damage source — pets and
-    // minions have src->self == 0 even when attributed to the master, so
-    // their auto-attacks while OOC cannot restart a fight; and (b) STRIKE
-    // events (ev->buff == 0) — condi tail ticks landing after EXITCOMBAT
-    // would otherwise look like a fresh fight.
+    // Implicit-enter when arc skipped CBTS_ENTERCOMBAT. Cold-start requires
+    // (a) self as literal source — pets/minions have src->self == 0 even
+    // when attributed to the master, so their OOC autos cannot restart a
+    // fight; and (b) a strike (ev->buff == 0) — condi tail ticks landing
+    // after EXITCOMBAT would otherwise look like a fresh fight. Pets/condi
+    // may still enter for their owner if the squad is already fighting.
     if (!owner->in_combat_wall) {
         bool from_self = src->self != 0;
         bool is_strike = ev->buff == 0;
         bool can_start = from_self && is_strike;
-        // If the squad is already fighting, allow pets/condi to enter combat
-        // for their owner. Only self-strikes may cold-start a fight.
         if (!can_start && !any_in_combat_) return;
         if (has_fight_state(*owner)) reset_for_new_fight(*owner);
         owner->in_combat_wall = now;
         any_in_combat_ = true;
     } else if (!in_encounter_ && owner->last_damage_wall != 0) {
-        // GW2 keeps the player in combat for ~4 s after the last hit.
-        // If arc never sent EXITCOMBAT and we start a new pull, treat a
-        // long idle gap as a fight boundary so old damage doesn't leak over.
+        // GW2 keeps the player in combat for ~4s after the last hit. If arc
+        // never sent EXITCOMBAT, treat a long idle gap as a fight boundary
+        // so old damage doesn't leak into the next pull.
         uint64_t idle = now > owner->last_damage_wall
                       ? now - owner->last_damage_wall : 0;
         if (idle > 5000) {
@@ -466,47 +458,41 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     sk.hits   += 1;
     if (sk.first_hit_wall == 0) sk.first_hit_wall = now;
     sk.last_hit_wall = now;
-    // Per-skill hit timeline drives the spike overlay in the detail
-    // graph. Capped per-skill so heavy condi tickers (Burning, Bleed)
-    // can't blow memory on long fights.
+    // Cap per-skill so heavy condi tickers (Burning, Bleed) can't blow
+    // memory on long fights.
     sk.hits_history.push_back({now, delta});
     if (sk.hits_history.size() > 1024) sk.hits_history.pop_front();
 
-    // Per-target damage attribution. Drains on the downing hit
-    // (ev->result == CBTR_DOWNED) into damage_to_downed for each attacker.
-    // arc's realtime feed delivers CBTS_CHANGEDOWN/CHANGEDEAD only for
-    // squad members per the evtc spec, so enemy-player downs in WvW never
-    // surface as state-changes; the result-code path is the only realtime
-    // signal that works for non-squad targets. dst is non-null in real
-    // damage events — guarded anyway since condi-tail / minion ticks can
-    // fire with partial event payloads.
-    // Down contribution is player-vs-player only. NPCs (pets, minions,
-    // mesmer clones, jade mech) classify with elite == 0xFFFFFFFFu and
-    // would otherwise inflate down counts since some of them go through
-    // a real downstate. Players have elite != 0xFFFFFFFF per the evtc
-    // spec.
+    // Per-target damage attribution drains on the downing hit
+    // (ev->result == CBTR_DOWNED) into damage_to_downed. arc's realtime
+    // feed delivers CHANGEDOWN/CHANGEDEAD only for squad members per the
+    // evtc spec, so enemy-player downs in WvW never surface as state-
+    // changes — the result-code path is the only realtime signal for
+    // non-squad targets.
+    //
+    // Player-vs-player only. NPCs (pets, minions, clones, jade mech)
+    // classify with elite == 0xFFFFFFFFu and some go through real
+    // downstate; counting them would inflate down counts. Players have
+    // elite != 0xFFFFFFFF per the evtc spec.
     bool dst_is_player = dst && dst->id &&
                          dst->elite != 0xFFFFFFFFu;
     if (dst_is_player) {
-        // ev->is_offcycle has different meanings for strike vs condi
-        // events per evtc spec:
-        //   - strike (buff == 0): is_offcycle == 1 = damage to downed
+        // ev->is_offcycle differs by event kind per evtc spec:
+        //   - strike  (buff == 0): is_offcycle == 1 = damage to downed
         //     target (cleave-on-downed signal).
-        //   - condi tick (buff != 0): is_offcycle == 1 = off-cycle tick
-        //     (stack expired/reapplied), unrelated to downstate.
-        // Without the is_strike gate, every condi off-cycle tick on an
-        // upstate foe falsely trips downed_now and inflates
-        // downs_contributed for condi specs. CBTR_DOWNED in result is
-        // still valid for both kinds.
+        //   - condi   (buff != 0): is_offcycle == 1 = off-cycle stack
+        //     rebuild, unrelated to downstate.
+        // Without the is_strike gate, condi off-cycle ticks on upstate
+        // foes would trip downed_now and inflate downs_contributed.
+        // CBTR_DOWNED in result is valid for both kinds.
         bool was_down  = downed_[dst->id];
         bool is_strike = (ev->buff == 0);
         bool is_down   = is_strike && (ev->is_offcycle != 0);
         bool downed_now = (ev->result == CBTR_DOWNED) ||
                           (is_down && !was_down);
 
-        // Strict "down contribution": only accumulate while target is
-        // up. Damage on rallied targets resumes counting because
-        // was_down flips back to false on the next upstate strike.
+        // Only accumulate while target is up. On rally, was_down flips
+        // back to false on the next upstate strike and counting resumes.
         if (!was_down) {
             target_dmg_[dst->id][owner->id] += delta;
         }
@@ -515,10 +501,9 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         }
 
         if (downed_now) {
-            // Sticky the flag so cleave-on-downed events hit the
-            // was_down guard. Needed when arc fires CBTR_DOWNED with
-            // is_offcycle=0 — the assignment above would otherwise
-            // leave the flag clear after drain.
+            // Sticky the flag so cleave-on-downed events hit the was_down
+            // guard. Needed when arc fires CBTR_DOWNED with is_offcycle=0
+            // — the assignment above would leave the flag clear after drain.
             downed_[dst->id] = true;
             auto tit = target_dmg_.find(dst->id);
             if (tit != target_dmg_.end()) {
@@ -537,9 +522,9 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         }
     }
 
-    // Sample cumulative damage every ~500ms for the detail-window graph.
-    // Deque pop_front is O(1) — vector::erase(begin) was O(n) and stalled
-    // the combat thread during long fights once the cap was reached.
+    // Sample cumulative damage every ~500ms. deque pop_front is O(1) —
+    // vector::erase(begin) was O(n) and stalled the combat thread on long
+    // fights once the cap was reached.
     if (owner->history.empty() ||
         now - owner->history.back().wall_ms >= 500) {
         owner->history.push_back({now, owner->damage_total});
@@ -556,8 +541,8 @@ AgentState* Tracker::touch_agent(ag* src) {
     if (!src || !src->id) return nullptr;
     auto it = agents_.find(src->id);
     if (it != agents_.end()) return &it->second;
-    // Only self can be created lazily here. Squad members must be added via
-    // tracking-add; bosses/NPCs are rejected.
+    // Only self can be lazy-created here; squad members must come via
+    // tracking-add. Bosses/NPCs are rejected.
     if (!src->self) return nullptr;
     auto& s = agents_[src->id];
     s.id        = src->id;
@@ -575,8 +560,8 @@ AgentState* Tracker::find_by_instid(uint16_t instid) {
         auto sit = agents_.find(it->second);
         if (sit != agents_.end()) return &sit->second;
     }
-    // Fallback: after reset_fight() clears the map, agents still retain
-    // their instid until a new tracking-add or lazy-register rebinds them.
+    // Linear fallback: after reset_fight() clears instid_to_id_, agents
+    // still retain their instid until tracking-add or lazy-register rebinds.
     for (auto& [id, s] : agents_) {
         if (s.instid == instid) return &s;
     }
@@ -602,9 +587,9 @@ void Tracker::reset_fight() {
             s.alive               = true;
             s.skills.clear();
             s.history.clear();
-            // Drop the per-agent instid alongside the global map so
-            // find_by_instid()'s linear fallback can't match a stale
-            // binding after instids get recycled between fights.
+            // Clear per-agent instid alongside instid_to_id_ so the linear
+            // fallback in find_by_instid() can't match a stale binding
+            // after instids are recycled between fights.
             s.instid              = 0;
             ++it;
         }
@@ -648,8 +633,8 @@ void Tracker::detail(uintptr_t id, AgentDetail& out) const {
             out.skills.push_back(std::move(sd));
         }
     }
-    // Sort outside the lock so combat thread isn't blocked by std::sort
-    // for the duration of skill-table sorting (worst case ~100 entries).
+    // Sort outside the lock so the combat thread isn't blocked while
+    // sorting the skill table (worst case ~100 entries).
     std::sort(out.skills.begin(), out.skills.end(),
         [](const SkillDetail& a, const SkillDetail& b) { return a.damage > b.damage; });
 }
@@ -661,22 +646,19 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
     uint64_t now = wall_now();
     for (const auto& [id, s] : agents_) {
         if (!s.is_player) continue;
-        // Drop squadmates that arc has marked as removed (e.g. left squad,
-        // changed instance) so old DPS rows from a previous squad don't
-        // linger after joining a new one. Self always stays so the local
-        // player's previous-fight stats remain visible OOC.
+        // Drop squadmates arc marked as removed (left squad, changed
+        // instance). Self always stays so previous-fight stats remain
+        // visible OOC.
         if (!s.present && !s.is_self) continue;
-        // Combat time = active-damage window (first -> last damage event),
-        // extending to now while the agent is still in combat. Matches
-        // arc's Damage panel denominator.
+        // Combat time = first->last damage event, extending to now while
+        // still in combat. Matches arc's Damage panel denominator.
         uint64_t ms = 0;
         if (s.first_damage_wall != 0) {
             uint64_t end = s.in_combat_wall ? now : s.last_damage_wall;
             if (end > s.first_damage_wall) ms = end - s.first_damage_wall;
         }
-        // Fight-average DPS over the active-damage window with a 500ms
-        // floor — recognizes the initial damage spike (first hit reads as
-        // damage / 500ms) then settles to the running average.
+        // 500ms floor on the denominator — first hit reads as
+        // damage / 500ms, then settles to the running average.
         uint64_t denom = ms < 500 ? 500 : ms;
         uint64_t dps   = s.damage_total * 1000ull / denom;
         out.push_back(Snapshot{

@@ -17,8 +17,7 @@ namespace {
     uintptr_t   g_selected_agent = 0;
     AgentDetail g_detail;
 
-    // Skill selected by clicking a row in the skills table. Drives the
-    // spike overlay on the DPS graph. 0 = nothing selected.
+    // 0 = nothing selected. Drives the spike overlay on the DPS graph.
     uint32_t    g_selected_skill = 0;
 }
 
@@ -61,9 +60,9 @@ void draw_detail_window() {
 
     bool open = s.detail_open;
     if (ImGui::Begin(title, &open)) {
-        // ESC dismissal is handled in mod_wnd_filter (exports.cpp) via
-        // consume_esc_for_detail(), since arc swallows ESC at the
-        // wndproc layer before ImGui::IsKeyPressed sees it.
+        // ESC dismissal lives in mod_wnd_filter (exports.cpp) via
+        // consume_esc_for_detail() — arc swallows ESC at the wndproc layer
+        // before ImGui::IsKeyPressed sees it.
         ImVec2 dpos = ImGui::GetWindowPos();
         ImVec2 dsiz = ImGui::GetWindowSize();
         capture_window_pos(dpos, s.detail_x, s.detail_y,
@@ -71,15 +70,11 @@ void draw_detail_window() {
         s.detail_w = dsiz.x;
         s.detail_h = dsiz.y;
 
-        // Damage over time graph.
-        // DPS-over-time: first difference of the cumulative damage
-        // samples divided by the elapsed wall-ms between them.
-        // Per-interval DPS, manual plot so the hover tooltip can format
-        // values with a "k" suffix instead of ImGui's built-in "%8.4g".
-        // Compute per-sample DPS over a 1-second lookback window. The
-        // raw history is sampled every 500ms, so adjacent-pair diffs
-        // double-count short bursts and inflate peaks vs arc's panel.
-        // 1s window matches arc's peak more closely.
+        // Per-sample DPS over a 1-second lookback window. The raw history
+        // is sampled every 500ms, so adjacent-pair diffs double-count short
+        // bursts and inflate peaks vs arc's panel — a 1s window matches
+        // arc's peak more closely. Manual plot (instead of PlotLines) so
+        // the hover tooltip can format values with a "k" suffix.
         std::vector<float> samples;
         samples.reserve(d.history.size());
         float peak_dps = 0.0f;
@@ -95,9 +90,6 @@ void draw_detail_window() {
             samples.push_back(dps);
             if (dps > peak_dps) peak_dps = dps;
         }
-        // Title line above the graph. Shows selected skill name when a
-        // row in the skills table is clicked, so the spike overlay is
-        // self-explanatory. Click again to clear.
         const SkillDetail* sel_skill = nullptr;
         if (g_selected_skill != 0) {
             for (const auto& sk : d.skills) {
@@ -127,14 +119,13 @@ void draw_detail_window() {
             ImVec2 graph_p1 = ImVec2(graph_p0.x + graph_w, graph_p0.y + graph_h);
             auto* dl = ImGui::GetWindowDrawList();
 
-            // Hit-test region first so visuals render on top.
+            // InvisibleButton first so visuals render on top of the hit rect.
             ImGui::InvisibleButton("##graph", ImVec2(total_w, graph_h));
             bool hovered = ImGui::IsItemHovered();
 
             dl->AddRectFilled(graph_p0, graph_p1, IM_COL32(20, 20, 20, 180));
             dl->AddRect      (graph_p0, graph_p1, IM_COL32(80, 80, 80, 255));
 
-            // Y-axis grid + labels at 0%, 25%, 50%, 75%, 100%.
             const ImU32 grid_col  = IM_COL32(60, 60, 60, 255);
             const ImU32 label_col = IM_COL32(180, 180, 180, 255);
             for (int g = 0; g <= 4; ++g) {
@@ -150,7 +141,6 @@ void draw_detail_window() {
                 dl->AddText({graph_p0.x - ts.x - 4.0f, y - ts.y * 0.5f}, label_col, lbl);
             }
 
-            // DPS line.
             const int n = static_cast<int>(samples.size());
             for (int i = 0; i < n - 1; ++i) {
                 float t0 = static_cast<float>(i)     / static_cast<float>(n - 1);
@@ -162,12 +152,10 @@ void draw_detail_window() {
                             IM_COL32(110, 180, 255, 255), 1.5f);
             }
 
-            // Skill spike overlay. Each per-hit damage event for the
-            // selected skill draws a vertical bar at its wall-time on
-            // the graph, height ∝ damage, so the user can see WHEN that
-            // skill landed its big hits relative to the DPS curve.
-            // Time anchors come from the same history range that drives
-            // sample placement, keeping the overlay aligned to the line.
+            // Skill spike overlay: per-hit vertical bar at its wall-time,
+            // height ∝ damage. Time anchors come from the same history
+            // range as sample placement so the overlay stays aligned to
+            // the DPS curve.
             if (sel_skill && !sel_skill->hits_history.empty() &&
                 d.history.size() >= 2) {
                 uint64_t t_start = d.history[1].wall_ms;
@@ -208,7 +196,6 @@ void draw_detail_window() {
                     : graph_w * 0.5f);
                 float hy = graph_p1.y - (v / peak_dps) * graph_h;
 
-                // Vertical crosshair + dot on the line at the hovered sample.
                 dl->AddLine({hx, graph_p0.y}, {hx, graph_p1.y},
                             IM_COL32(255, 255, 255, 100), 1.0f);
                 dl->AddCircleFilled({hx, hy}, 3.0f,
@@ -246,12 +233,11 @@ void draw_detail_window() {
             ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
         if (!s.body_borders) sk_flags |= ImGuiTableFlags_NoBordersInBody;
-        // Top skill's damage drives the per-row bar fraction. Skills are
-        // already sorted descending in tracker::detail(), so it's [0].
+        // tracker::detail() pre-sorts skills descending, so [0] is the top.
         uint64_t top_sk_dmg = d.skills.empty() ? 0 : d.skills.front().damage;
 
-        // Reset skill selection if it points at a skill that no longer
-        // exists in the current detail snapshot (fight reset, etc.).
+        // Drop selection if it points at a skill no longer in the snapshot
+        // (fight reset, etc.).
         if (g_selected_skill != 0) {
             bool still_present = false;
             for (const auto& sk : d.skills) {
@@ -275,10 +261,6 @@ void draw_detail_window() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
 
-                // Full-row damage bar drawn first (background channel) so
-                // text/cells render on top. Bar width = sk.damage / top.
-                // Selected skill gets a brighter accent so the click
-                // target is visually identifiable.
                 if (top_sk_dmg > 0 && sk.damage > 0) {
                     if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
                         float frac = static_cast<float>(sk.damage) /
@@ -297,8 +279,6 @@ void draw_detail_window() {
                     }
                 }
 
-                // Selectable spans all columns so anywhere on the row is
-                // a click target. Toggling the same skill clears it.
                 ImGui::PushID(static_cast<int>(sk.skill_id));
                 bool is_sel = (g_selected_skill == sk.skill_id);
                 char id_lbl[24];
@@ -328,8 +308,8 @@ void draw_detail_window() {
                     ImGui::TextUnformatted("-");
                 }
                 ImGui::TableNextColumn();
-                // DPS over this skill's own active window (first hit -> last hit),
-                // not over total fight time. Matches arc's "/as" per-active-second.
+                // DPS over the skill's active window (first hit -> last hit),
+                // not total fight time. Matches arc's "/as" per-active-second.
                 uint64_t sk_window = sk.last_hit_wall > sk.first_hit_wall
                                    ? sk.last_hit_wall - sk.first_hit_wall : 0;
                 uint64_t sk_denom  = sk_window < 1000 ? 1000 : sk_window;

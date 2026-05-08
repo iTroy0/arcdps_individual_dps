@@ -21,16 +21,15 @@
 namespace idps {
 
 namespace {
-    // EMA smoothing for the live DPS column so it doesn't tick like a
-    // stopwatch every frame. Cadence ~500ms; weight 3:1 (old:new).
+    // EMA smoothing for the live DPS column. Cadence ~500ms, weight 3:1 (old:new).
     struct DpsCache {
         uint64_t last_wall = 0;
         uint64_t shown     = 0;
     };
     std::unordered_map<uintptr_t, DpsCache> g_dps_cache;
 
-    // Reusable per-frame buffer — sits in static storage so we don't realloc
-    // a new vector + per-agent strings every render.
+    // Reusable per-frame buffer — static storage avoids realloc + per-agent
+    // string copies every render.
     std::vector<Snapshot> g_rows;
 
     uint64_t smooth_dps(uintptr_t id, uint64_t instant) {
@@ -53,12 +52,12 @@ namespace {
         return c.shown;
     }
 
-    // Drop EMA cache entries for agents that have left the snapshot. Keeps
-    // the cache from accumulating stale ids across long sessions (WvW, etc).
+    // Drop EMA cache entries for agents no longer in the snapshot, so the
+    // cache doesn't accumulate stale ids across long WvW sessions.
     void prune_dps_cache(const std::vector<Snapshot>& rows) {
-        // Always rebuild the live set; agent churn (one leaves, one joins)
-        // can keep the cache size equal to rows.size() while a stale id
-        // lingers. Cost is one set-build per frame for ~50 squadmates.
+        // Rebuild the live set every frame: agent churn (one leaves, one
+        // joins) can keep cache.size() == rows.size() while a stale id
+        // lingers. ~50-element set-build per frame is cheap.
         std::unordered_set<uintptr_t> live;
         live.reserve(rows.size());
         for (const auto& r : rows) live.insert(r.id);
@@ -116,8 +115,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             ImGui::EndPopup();
         }
 
-        // Capture available width before BeginTable so we can drop
-        // low-priority columns when the user shrinks the window.
+        // Capture available width before BeginTable so responsive-column
+        // logic below can drop low-priority columns when the window shrinks.
         float table_avail_w = ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
@@ -132,8 +131,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                     ImGuiTableColumnFlags_WidthFixed, 22.0f);
             ImGui::TableSetupColumn("Name",
                                     ImGuiTableColumnFlags_WidthStretch);
-            // Numeric columns prefer descending on first click — DPS / damage /
-            // combat-time / share are conventionally read high-to-low.
+            // Numeric columns prefer descending on first click (high-to-low
+            // is the natural read for DPS / damage / combat / share).
             ImGui::TableSetupColumn("DPS",
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
@@ -152,22 +151,17 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                     40.0f);
             ImGui::TableHeadersRow();
 
-            // Drop low-priority columns as the window narrows. Order of
-            // sacrifice: % -> Combat -> Damage -> DPS. Prof + Name always
-            // stay. Thresholds are the column's own fixed width plus typical
-            // cell padding; below that the column eats more space than its
-            // information value. Skipped when the user disables responsive
-            // mode (lets the Hideable header menu drive instead).
+            // Drop low-priority columns as the window narrows. Sacrifice
+            // order: % -> Combat -> Damage -> DPS. Prof + Name always stay.
             if (s.responsive_columns) {
                 if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
                     bool show_pct    = table_avail_w > 320.0f;
                     bool show_combat = table_avail_w > 270.0f;
                     bool show_dmg    = table_avail_w > 220.0f;
                     bool show_dps    = table_avail_w > 170.0f;
-                    // Only force enabled-state on threshold crossings so the
-                    // user's manual header-menu toggles persist between width
-                    // changes. Without this guard, every frame stomps the user
-                    // checkbox and they can't hide DPS / Damage / Combat / %.
+                    // Force enabled-state only on threshold crossings, otherwise
+                    // every frame stomps the user's header-menu toggles and they
+                    // can't manually hide a column.
                     static bool prev_pct = true, prev_combat = true,
                                 prev_dmg = true, prev_dps = true;
                     static bool init = false;
@@ -241,16 +235,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             for (const auto& r : g_rows) {
                 ImGui::TableNextRow();
                 if (r.is_self && s.highlight_self) {
-                    // Subtle blue tint over the row's striped bg so the local
-                    // player is identifiable at a glance without overriding
-                    // profession color on the name itself.
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                                            IM_COL32(80, 150, 220, 40));
                 }
                 ImGui::TableNextColumn();
 
-                // Full-row damage bar drawn here (before any cell text) so
-                // text/icons render on top of the bar in the same drawlist.
+                // Full-row damage bar drawn before any cell text so text/icons
+                // render on top of the bar in the same drawlist.
                 ImU32 prof_col = prof_color(r.prof);
                 if (!r.in_combat) prof_col = dim_alpha(prof_col);
 
@@ -264,8 +255,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
                         ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
-                        // Draw on the table's background channel so the bar
-                        // is clipped to the table rect, not the current cell.
+                        // Background channel clips the bar to the table rect,
+                        // not the current cell.
                         ImGui::TablePushBackgroundChannel();
                         ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
                         ImGui::TablePopBackgroundChannel();
@@ -290,7 +281,6 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     }
                     if (!r.in_combat) text_col = dim_alpha(text_col);
 
-                    // Per-cell bar (Name column only) when full-row is off.
                     if (!s.bar_full_row && max_damage > 0 && r.damage_total > 0) {
                         float col_w = ImGui::GetContentRegionAvail().x;
                         if (col_w > 0.0f) {

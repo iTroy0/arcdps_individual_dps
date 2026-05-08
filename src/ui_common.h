@@ -20,8 +20,6 @@ ImU32 dim_alpha(ImU32 col);
 
 void sort_rows(std::vector<Snapshot>& rows, int mode);
 
-// Move the local player's row to the front. No-op if absent or already
-// first. Used to honor the self_pin_top setting after sort/reverse.
 void pin_self_to_top(std::vector<Snapshot>& rows);
 void pin_self_to_top(std::vector<size_t>& idx,
                      const std::vector<Snapshot>& rows);

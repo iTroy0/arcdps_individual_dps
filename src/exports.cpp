@@ -66,7 +66,6 @@ arcdps_exports* mod_init() {
 }
 
 uintptr_t mod_release() {
-    // Snapshot UI options into settings before persisting.
     auto& s = settings();
     s.exclude_npcs    = options().exclude_npcs.load(std::memory_order_relaxed);
     s.exclude_gadgets = options().exclude_gadgets.load(std::memory_order_relaxed);

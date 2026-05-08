@@ -21,8 +21,8 @@ void icons_ensure_loaded(const std::string& icons_dir = "");
 
 void icons_shutdown();
 
-// Returns an ImGui-compatible texture id (ID3D11ShaderResourceView*) or 0
-// if the icon isn't loaded. Falls back through elite -> prof.
+// Returns an ImGui texture id (ID3D11ShaderResourceView*) or 0. Falls
+// back from elite to core profession when the elite SRV is missing.
 uint64_t icon_for(uint32_t prof, uint32_t elite);
 
 } // namespace idps

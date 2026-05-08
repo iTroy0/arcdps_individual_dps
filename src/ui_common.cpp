@@ -6,11 +6,9 @@
 namespace idps {
 
 ImU32 prof_color(uint32_t prof) {
-    // Saturation + luminance lifted across the board so prof identity
-    // pops on the translucent window background. Hues kept matching the
-    // canonical GW2 prof palette so users still parse them at a glance.
-    // Necro stays a darker green vs Ranger's lighter green so the two
-    // don't blur into each other in mixed squads.
+    // Saturation + luminance bumped vs canonical GW2 prof palette so colors
+    // pop on the translucent window background. Necro stays darker green
+    // than Ranger so they don't blur together in mixed squads.
     switch (prof) {
         case 1: return IM_COL32(120, 220, 255, 255); // Guardian
         case 2: return IM_COL32(255, 220,  90, 255); // Warrior
@@ -54,10 +52,9 @@ void format_count(char* out, size_t n, uint64_t v) {
     else std::snprintf(out, n, "%llu", (unsigned long long)v);
 }
 
-// Drop alpha to ~67% (instead of 50%) for out-of-combat rows. Halving
-// alpha was washing names out against the translucent window background;
-// 170/255 keeps the in/out-of-combat distinction visible without making
-// names unreadable. Preserves RGB so prof color identity stays intact.
+// Drop alpha to ~67% for out-of-combat rows. 50% washed names out against
+// the translucent window bg; 170/255 keeps the distinction visible while
+// preserving RGB so prof color identity stays intact.
 ImU32 dim_alpha(ImU32 col) {
     uint32_t a = (col >> 24) & 0xFFu;
     a = (a * 170u) / 255u;
@@ -102,7 +99,7 @@ void pin_self_to_top(std::vector<size_t>& idx,
     }
 }
 
-// Tooltip helper that doesn't depend on the newer SetItemTooltip API.
+// Avoids SetItemTooltip (newer ImGui) so this builds against arc's pinned version.
 void item_tooltip(const char* text) {
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
@@ -113,8 +110,6 @@ void item_tooltip(const char* text) {
     }
 }
 
-// Vertically center a 14x14 prof icon against the row's text baseline so
-// the icon doesn't sit higher than the name text in the same row.
 void align_icon_to_text() {
     float dy = (ImGui::GetTextLineHeight() - 14.0f) * 0.5f;
     if (dy > 0.0f) {
@@ -122,18 +117,14 @@ void align_icon_to_text() {
     }
 }
 
-// Apply window position with optional viewport-relative mode. When
-// pos_relative is on and rx/ry are valid, position is computed as a
-// fraction of the display area so the window keeps its on-screen
-// location across resolution changes / monitor swaps. ImGui v1.80
-// (non-docking branch) doesn't expose GetMainViewport, so we use
-// io.DisplaySize which arc fills with the swapchain back-buffer size.
+// Apply window position with optional viewport-relative mode. ImGui v1.80
+// (non-docking) lacks GetMainViewport, so io.DisplaySize (arc fills it with
+// the swapchain back-buffer) is the viewport reference.
 //
-// FirstUseEver alone doesn't reposition the window after a resolution
-// change or after the user toggles relative mode on — ImGui's cached
-// pos wins. Caller-owned prev_relative + prev_ds let us detect those
-// edges and force-apply (Always) for that single frame, then drop back
-// to FirstUseEver so user dragging isn't fought every frame.
+// FirstUseEver alone won't reposition after a resolution change or relative-
+// mode toggle (ImGui's cached pos wins). prev_relative + prev_ds detect those
+// edges so we force-apply (Always) for one frame, then drop back to
+// FirstUseEver so user dragging isn't fought every frame.
 void apply_window_pos(float abs_x, float abs_y, float rx, float ry, bool relative,
                       bool& prev_relative, ImVec2& prev_ds) {
     const ImVec2& ds = ImGui::GetIO().DisplaySize;
@@ -151,9 +142,8 @@ void apply_window_pos(float abs_x, float abs_y, float rx, float ry, bool relativ
     prev_relative = relative;
 }
 
-// Capture window pos as both absolute pixels and display-relative
-// fractions every frame, so toggling pos_relative later has valid
-// fractions to apply on next session start.
+// Capture both absolute pixels and display-relative fractions every frame,
+// so toggling pos_relative later has valid fractions ready on next session.
 void capture_window_pos(const ImVec2& pos, float& abs_x, float& abs_y,
                         float& rx, float& ry) {
     abs_x = pos.x;

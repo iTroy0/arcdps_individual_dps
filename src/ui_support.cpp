@@ -17,9 +17,9 @@ namespace {
     std::vector<size_t> g_sort_idx;
 }
 
-// Render a support window (Cleanses / Strips). Uses an index-sort over
-// the shared rows vector so we don't copy Snapshots — a 50-player squad
-// with both windows open used to do 100 string copies per frame.
+// Index-sort over the shared rows vector to avoid Snapshot copies — a
+// 50-player squad with both Cleanses + Strips windows open would otherwise
+// do ~100 string copies per frame.
 void draw_support_window(const char* title, bool* open,
                          const std::vector<Snapshot>& rows,
                          uint32_t Snapshot::*field) {
@@ -49,7 +49,7 @@ void draw_support_window(const char* title, bool* open,
             if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
 
             // Top count drives the per-row bar fraction. Computed once
-            // outside the row loop so we don't re-scan per render.
+            // outside the row loop.
             uint32_t max_count = 0;
             for (size_t i : g_sort_idx) {
                 uint32_t c = rows[i].*field;
@@ -65,9 +65,6 @@ void draw_support_window(const char* title, bool* open,
                 ImU32 prof_col = prof_color(r.prof);
                 if (!r.in_combat) prof_col = dim_alpha(prof_col);
 
-                // Full-row count bar drawn on the table background channel
-                // so text/icons render on top. Mirrors the Damage window's
-                // bar style; fraction = count / max_count.
                 if (max_count > 0 && count > 0) {
                     if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
                         float frac = static_cast<float>(count) /
@@ -141,8 +138,6 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                                     44.0f);
             ImGui::TableHeadersRow();
 
-            // Sort by active spec — defaults to Contrib desc via DefaultSort
-            // flag above. Click the Contrib or Downs / Name header to switch.
             int  sort_col = 2;
             bool ascending = false;
             if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
@@ -173,7 +168,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
             if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
 
             // Top contribution drives the per-row bar fraction. Computed
-            // once outside the loop so it's a single pass per render.
+            // once outside the row loop.
             uint64_t max_contrib = 0;
             for (size_t i : g_sort_idx) {
                 if (rows[i].damage_to_downed > max_contrib)
@@ -188,9 +183,6 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                 ImU32 prof_col = prof_color(r.prof);
                 if (!r.in_combat) prof_col = dim_alpha(prof_col);
 
-                // Full-row contribution bar drawn on the table background
-                // channel so text/icons render on top. Fraction =
-                // damage_to_downed / max_contrib, prof-colored.
                 if (max_contrib > 0 && r.damage_to_downed > 0) {
                     if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
                         float frac = static_cast<float>(r.damage_to_downed) /
