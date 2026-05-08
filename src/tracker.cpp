@@ -144,6 +144,7 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                 s.is_self   = (src->self != 0) || (dst && dst->self != 0);
                 s.is_player = true;
                 s.present   = true;
+                s.last_seen_wall = wall_now();
                 if (dst && dst->id) {
                     s.instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
                     instid_to_id_[s.instid] = src->id;
@@ -163,13 +164,23 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
 
     // Arc doesn't always re-fire tracking-add after a build/spec swap, but
     // damage and state-change events usually carry current prof/elite.
+    // Same loop touches last_seen_wall so the staleness filter in
+    // snapshot() knows the agent is still receiving events.
+    uint64_t now_seen = wall_now();
     if (src && src->id) {
         auto it = agents_.find(src->id);
-        if (it != agents_.end() && it->second.is_player) {
-            if (src->prof >= 1 && src->prof <= 9) {
+        if (it != agents_.end()) {
+            it->second.last_seen_wall = now_seen;
+            if (it->second.is_player && src->prof >= 1 && src->prof <= 9) {
                 it->second.prof  = src->prof;
                 it->second.elite = src->elite;
             }
+        }
+    }
+    if (dst && dst->id) {
+        auto it = agents_.find(dst->id);
+        if (it != agents_.end()) {
+            it->second.last_seen_wall = now_seen;
         }
     }
 
@@ -251,19 +262,6 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             // first credited damage), so a squadmate's pull cannot reset
             // rows for people not yet in combat.
             in_encounter_ = true;
-            break;
-        case CBTS_MAPCHANGE:
-            // Squadmates may stay in the squad but leave tracking range
-            // (e.g. EBG squad still listed after moving to Armistice).
-            // Drop them from snapshot() and clear instid bindings so fresh
-            // tracking-add on the new map re-registers cleanly. Self is
-            // preserved so previous-fight stats remain visible.
-            for (auto& [id, agent] : agents_) {
-                if (agent.is_self) continue;
-                instid_to_id_.erase(agent.instid);
-                agent.instid  = 0;
-                agent.present = false;
-            }
             break;
         case CBTS_SQCOMBATEND:
             for (auto& [id, s] : agents_) {
@@ -650,6 +648,17 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
         // instance). Self always stays so previous-fight stats remain
         // visible OOC.
         if (!s.present && !s.is_self) continue;
+        // Drop squadmates that haven't fired any arc event in the staleness
+        // window. Arc has no realtime CBTS_MAPCHANGE / DESPAWN signal we can
+        // hook for the local player, so old-map squadmates persist forever
+        // unless a separate explicit tracking-remove fires (which arc does
+        // not always do across instance ports). 60s is long enough to keep
+        // OOC squadmates visible during normal play; arc forwards their
+        // boon ticks, animations, and state changes well within that window
+        // when they're in range.
+        constexpr uint64_t kStaleAgentMs = 60000;
+        if (!s.is_self && s.last_seen_wall != 0 &&
+            now - s.last_seen_wall > kStaleAgentMs) continue;
         // Combat time = first->last damage event, extending to now while
         // still in combat. Matches arc's Damage panel denominator.
         uint64_t ms = 0;

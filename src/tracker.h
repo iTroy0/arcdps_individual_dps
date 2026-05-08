@@ -53,6 +53,13 @@ struct AgentState {
     uint64_t              first_damage_wall = 0;
     uint64_t              last_damage_wall  = 0;
 
+    // Wall-clock of the last arc event referencing this agent. Drives
+    // the snapshot() staleness filter so squadmates from a prior map
+    // (no events firing in your range) drop after kStaleAgentMs of
+    // silence — arc has no realtime CBTS_MAPCHANGE / DESPAWN signal we
+    // can hook for the local player.
+    uint64_t              last_seen_wall    = 0;
+
     uint32_t              strip_count   = 0;
     uint32_t              cleanse_count = 0;
 
