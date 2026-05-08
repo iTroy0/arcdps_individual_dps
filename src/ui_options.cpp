@@ -61,6 +61,11 @@ void draw_appearance_section() {
     item_tooltip("Render your own player name in gold so it stands out "
                  "against squadmates, regardless of profession color.");
 
+    bool pin = s.self_pin_top;
+    if (ImGui::Checkbox("Pin self to top", &pin)) s.self_pin_top = pin;
+    item_tooltip("Keep your own row at the top of every player table "
+                 "regardless of the active sort order.");
+
     bool bb = s.body_borders;
     if (ImGui::Checkbox("Column dividers in body", &bb)) s.body_borders = bb;
     item_tooltip("Show thin vertical lines between columns in the table "

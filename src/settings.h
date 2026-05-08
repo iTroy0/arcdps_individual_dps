@@ -35,6 +35,12 @@ struct Settings {
     // is me" pop in big squads.
     bool  self_name_gold  = false;
 
+    // Pin the local player's row to the top of every player table
+    // (Damage, Cleanses, Strips, Down contribution) regardless of sort
+    // order, so squad-mates have to scroll to find someone else but
+    // never have to scroll to find themselves.
+    bool  self_pin_top    = true;
+
     // Auto-hide low-priority columns when the Damage window gets narrow.
     // Drops %, Combat, Damage, then DPS in that order. Prof + Name always
     // stay visible. Disable for manual control via the Hideable header menu.

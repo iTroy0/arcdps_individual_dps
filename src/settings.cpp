@@ -85,6 +85,7 @@ namespace {
         else if (k == "highlight_self") s.highlight_self = std::atoi(v.c_str()) != 0;
         else if (k == "name_white")     s.name_white     = std::atoi(v.c_str()) != 0;
         else if (k == "self_name_gold") s.self_name_gold = std::atoi(v.c_str()) != 0;
+        else if (k == "self_pin_top")   s.self_pin_top   = std::atoi(v.c_str()) != 0;
         else if (k == "responsive_columns") s.responsive_columns = std::atoi(v.c_str()) != 0;
         else if (k == "body_borders")   s.body_borders   = std::atoi(v.c_str()) != 0;
         else if (k == "bar_full_row")   s.bar_full_row   = std::atoi(v.c_str()) != 0;
@@ -175,6 +176,7 @@ void settings_save() {
     std::fprintf(f, "highlight_self=%d\n",  s.highlight_self ? 1 : 0);
     std::fprintf(f, "name_white=%d\n",      s.name_white     ? 1 : 0);
     std::fprintf(f, "self_name_gold=%d\n",  s.self_name_gold ? 1 : 0);
+    std::fprintf(f, "self_pin_top=%d\n",    s.self_pin_top   ? 1 : 0);
     std::fprintf(f, "responsive_columns=%d\n", s.responsive_columns ? 1 : 0);
     std::fprintf(f, "body_borders=%d\n",    s.body_borders   ? 1 : 0);
     std::fprintf(f, "bar_full_row=%d\n",    s.bar_full_row   ? 1 : 0);

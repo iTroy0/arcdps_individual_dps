@@ -85,6 +85,23 @@ void sort_rows(std::vector<Snapshot>& rows, int mode) {
     }
 }
 
+void pin_self_to_top(std::vector<Snapshot>& rows) {
+    auto it = std::find_if(rows.begin(), rows.end(),
+                           [](const Snapshot& r) { return r.is_self; });
+    if (it != rows.begin() && it != rows.end()) {
+        std::rotate(rows.begin(), it, it + 1);
+    }
+}
+
+void pin_self_to_top(std::vector<size_t>& idx,
+                     const std::vector<Snapshot>& rows) {
+    auto it = std::find_if(idx.begin(), idx.end(),
+        [&rows](size_t i) { return rows[i].is_self; });
+    if (it != idx.begin() && it != idx.end()) {
+        std::rotate(idx.begin(), it, it + 1);
+    }
+}
+
 // Tooltip helper that doesn't depend on the newer SetItemTooltip API.
 void item_tooltip(const char* text) {
     if (ImGui::IsItemHovered()) {

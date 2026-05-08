@@ -90,6 +90,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     tracker().snapshot(g_rows);
     sort_rows(g_rows, s.sort_mode);
     if (s.sort_reverse) std::reverse(g_rows.begin(), g_rows.end());
+    if (s.self_pin_top)  pin_self_to_top(g_rows);
 
     uint64_t total_damage = 0;
     for (const auto& r : g_rows) total_damage += r.damage_total;
@@ -225,6 +226,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             s.sort_reverse = reverse;
                             sort_rows(g_rows, s.sort_mode);
                             if (reverse) std::reverse(g_rows.begin(), g_rows.end());
+                            if (s.self_pin_top) pin_self_to_top(g_rows);
                         }
                     }
                     specs->SpecsDirty = false;

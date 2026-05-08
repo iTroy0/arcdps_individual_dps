@@ -46,6 +46,7 @@ void draw_support_window(const char* title, bool* open,
                 [&rows, field](size_t a, size_t b) {
                     return rows[a].*field > rows[b].*field;
                 });
+            if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
 
             // Top count drives the per-row bar fraction. Computed once
             // outside the row loop so we don't re-scan per render.
@@ -169,6 +170,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                     }
                     return ascending ? less : !less;
                 });
+            if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
 
             // Top contribution drives the per-row bar fraction. Computed
             // once outside the loop so it's a single pass per render.
