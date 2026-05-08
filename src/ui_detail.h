@@ -9,11 +9,10 @@ uintptr_t selected_agent();
 
 void draw_detail_window();
 
-// Called from the wndproc callback (mod_wnd_filter) when ESC is pressed.
-// Closes the detail window if it's currently open and returns true so
-// the wndproc can consume the message (preventing GW2's game menu from
-// also opening on the same press). Returns false otherwise so ESC
-// propagates normally to the game.
+// Called from the wndproc on ESC. Closes the detail window if open and
+// returns true so the wndproc can swallow the press (otherwise GW2's
+// game menu would also open). Returns false when already closed so ESC
+// propagates to the game.
 bool consume_esc_for_detail();
 
 } // namespace idps

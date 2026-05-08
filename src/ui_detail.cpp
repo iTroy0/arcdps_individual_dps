@@ -28,10 +28,6 @@ void      set_selected_agent(uintptr_t id) {
 }
 uintptr_t selected_agent()                 { return g_selected_agent; }
 
-// ESC handler kept for compatibility with the wndproc-callback path —
-// not currently wired (returning 0 from arc's wnd_nofilter ate every
-// non-ESC message and broke clicks in-game). The ImGui-side ESC check
-// at the top of draw_detail_window handles dismissal instead.
 bool consume_esc_for_detail() {
     auto& s = settings();
     if (s.detail_open && g_selected_agent != 0) {
@@ -45,10 +41,6 @@ void draw_detail_window() {
     auto& s = settings();
     if (!s.detail_open || g_selected_agent == 0) return;
 
-    // ESC dismissal is handled in mod_wnd_nofilter (exports.cpp) via
-    // consume_esc_for_detail(). Arc grabs ESC at the keybind layer
-    // before forwarding to ImGui, so ImGui::IsKeyPressed never fires
-    // here.
     tracker().detail(g_selected_agent, g_detail);
     const auto& d = g_detail;
     if (d.name.empty()) {

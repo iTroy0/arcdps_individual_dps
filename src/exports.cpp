@@ -21,21 +21,12 @@ namespace {
     constexpr const char* kVersion = "0.4.9";
     constexpr const char* kBuild   = "0.4.9 (" __DATE__ " " __TIME__ ")";
 
-    // arc forwards raw WndProc messages here BEFORE its own keybind
-    // processing. Return convention (per arc plugin examples): return
-    // `msg` (non-zero) to pass the message through unchanged; return
-    // 0 to consume it so neither arc nor GW2 see it.
-    //
-    // ESC is GW2's game-menu key. Arc swallows it at the keybind layer
-    // before forwarding to ImGui, so ImGui::IsKeyPressed never fires
-    // for ESC inside ImGui frames. Catching it here lets us close the
-    // detail window AND swallow the press so GW2's menu doesn't also
-    // open on the same keystroke.
-    //
-    // CRITICAL: returning 0 for non-ESC messages would block every
-    // mouse click / keystroke from reaching the game (an earlier
-    // version did exactly that and broke all input). Always return
-    // `msg` for the default branch.
+    // arc's raw WndProc hook. Return convention: `msg` = pass through,
+    // 0 = consume so neither arc nor GW2 see it. Returning 0 in the
+    // default branch would block every click and keystroke from
+    // reaching the game — only consume the specific message we handle.
+    // ESC is grabbed at arc's keybind layer before reaching ImGui, so
+    // closing the detail window has to happen here.
     uintptr_t mod_wnd_nofilter(HWND /*hwnd*/, UINT msg,
                                WPARAM wparam, LPARAM /*lparam*/) {
         if (msg == WM_KEYDOWN && wparam == VK_ESCAPE) {
