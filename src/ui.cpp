@@ -135,7 +135,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             }
             if (viewing_history) {
                 ImGui::EndDisabled();
-                ImGui::TextDisabled("(viewing past — go to Current to reset)");
+                ImGui::TextDisabled("(viewing past - go to Current to reset)");
             }
             ImGui::EndPopup();
         }
@@ -150,8 +150,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             uint64_t dur_ms = fs_end > fs_start ? fs_end - fs_start : 0;
             char dbuf[32];
             format_time(dbuf, sizeof(dbuf), dur_ms);
-            ImGui::TextDisabled("Viewing Fight -%d  (%s) — right-click a row to switch",
-                                viewed_fight, dbuf);
+            ImGui::Text("Viewing Fight -%d  (%s) - right-click a row to switch",
+                        viewed_fight, dbuf);
             ImGui::SameLine();
             if (ImGui::SmallButton("Live")) viewed_fight = 0;
             ImGui::Separator();
@@ -357,14 +357,14 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             : tracker().top_skills(r.id, 3, tip);
                         if (ok && !tip.empty()) {
                             ImGui::BeginTooltip();
-                            ImGui::Text("Top skills — %s", r.name.c_str());
+                            ImGui::Text("Top skills - %s", r.name.c_str());
                             ImGui::Separator();
                             for (const auto& sd : tip) {
                                 char dmgbuf[16];
                                 format_count(dmgbuf, sizeof(dmgbuf), sd.damage);
                                 const char* nm = sd.name.empty() ? "(unknown)"
                                                                   : sd.name.c_str();
-                                ImGui::Text("%s — %s  (%u hits)",
+                                ImGui::Text("%s : %s  (%u hits)",
                                             nm, dmgbuf, sd.hits);
                             }
                             ImGui::EndTooltip();
@@ -375,7 +375,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     // The window-level popup uses NoOpenOverItems, so this
                     // item-level popup wins the right-click on a row.
                     if (ImGui::BeginPopupContextItem("##agent_fh")) {
-                        ImGui::TextDisabled("Fight history — %s", r.name.c_str());
+                        ImGui::Text("Fight history - %s", r.name.c_str());
                         ImGui::Separator();
                         if (viewed_fight != 0) {
                             if (ImGui::MenuItem("Current (live)")) {
