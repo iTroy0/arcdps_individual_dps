@@ -18,8 +18,8 @@ namespace {
     arcdps_exports g_exports{};
     constexpr uint32_t kPluginSig = 0x1D9A2E01u; // "individual dps" — avoid collisions
     constexpr const char* kName    = "individual_dps";
-    constexpr const char* kVersion = "0.5.0";
-    constexpr const char* kBuild   = "0.5.0 (" __DATE__ " " __TIME__ ")";
+    constexpr const char* kVersion = "0.6.0";
+    constexpr const char* kBuild   = "0.6.0 (" __DATE__ " " __TIME__ ")";
 
     // arc's raw WndProc hook. Return convention: `msg` = pass through,
     // 0 = consume so neither arc nor GW2 see it. Returning 0 in the
