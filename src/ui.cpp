@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -86,7 +87,26 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
 
-    tracker().snapshot(g_rows);
+    // Fight-history navigation. viewed_fight 0 = live current fight,
+    // 1 = most recent past fight, 2 = older, etc. Clamped to the deque
+    // size each frame so a FIFO drop doesn't leave the user pointing at
+    // a vanished entry.
+    int hist_n = tracker().history_size();
+    static int viewed_fight = 0;
+    if (viewed_fight > hist_n) viewed_fight = hist_n;
+    if (viewed_fight < 0)      viewed_fight = 0;
+
+    bool viewing_history = viewed_fight > 0;
+    if (viewing_history) {
+        int storage_idx = hist_n - viewed_fight;
+        if (!tracker().snapshot_at(storage_idx, g_rows)) {
+            viewed_fight = 0;
+            viewing_history = false;
+            tracker().snapshot(g_rows);
+        }
+    } else {
+        tracker().snapshot(g_rows);
+    }
     sort_rows(g_rows, s.sort_mode);
     if (s.sort_reverse) std::reverse(g_rows.begin(), g_rows.end());
     if (s.self_pin_top)  pin_self_to_top(g_rows);
@@ -107,12 +127,34 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             draw_popup_settings();
             ImGui::Separator();
+            if (viewing_history) ImGui::BeginDisabled();
             if (ImGui::Button("Reset fight")) {
                 tracker().reset_fight();
                 g_dps_cache.clear();
                 ImGui::CloseCurrentPopup();
             }
+            if (viewing_history) {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("(viewing past — go to Current to reset)");
+            }
             ImGui::EndPopup();
+        }
+
+        // Past-fight state line. Only renders when viewing history so live
+        // view stays uncluttered. Nav happens via right-click on a row -> Fight
+        // history menu; no arrows.
+        if (viewing_history) {
+            uint64_t fs_start = 0, fs_end = 0;
+            int storage_idx = hist_n - viewed_fight;
+            tracker().fight_times_at(storage_idx, fs_start, fs_end);
+            uint64_t dur_ms = fs_end > fs_start ? fs_end - fs_start : 0;
+            char dbuf[32];
+            format_time(dbuf, sizeof(dbuf), dur_ms);
+            ImGui::TextDisabled("Viewing Fight -%d  (%s) — right-click a row to switch",
+                                viewed_fight, dbuf);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Live")) viewed_fight = 0;
+            ImGui::Separator();
         }
 
         // Capture available width before BeginTable so responsive-column
@@ -303,6 +345,77 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         set_selected_agent(r.id);
                         s.detail_open = true;
                     }
+                    // Hover tooltip: top-3 skills for this agent in the
+                    // currently-viewed fight (live or past). top_skills*
+                    // skips the DamagePoint history copy so per-frame cost
+                    // stays trivial while hovering.
+                    if (ImGui::IsItemHovered() && r.damage_total > 0) {
+                        static std::vector<SkillDetail> tip;
+                        bool ok = viewing_history
+                            ? tracker().top_skills_at(hist_n - viewed_fight,
+                                                      r.id, 3, tip)
+                            : tracker().top_skills(r.id, 3, tip);
+                        if (ok && !tip.empty()) {
+                            ImGui::BeginTooltip();
+                            ImGui::Text("Top skills — %s", r.name.c_str());
+                            ImGui::Separator();
+                            for (const auto& sd : tip) {
+                                char dmgbuf[16];
+                                format_count(dmgbuf, sizeof(dmgbuf), sd.damage);
+                                const char* nm = sd.name.empty() ? "(unknown)"
+                                                                  : sd.name.c_str();
+                                ImGui::Text("%s — %s  (%u hits)",
+                                            nm, dmgbuf, sd.hits);
+                            }
+                            ImGui::EndTooltip();
+                        }
+                    }
+                    // Per-agent fight history menu. Right-click row -> jump
+                    // straight to a stored fight that contained this agent.
+                    // The window-level popup uses NoOpenOverItems, so this
+                    // item-level popup wins the right-click on a row.
+                    if (ImGui::BeginPopupContextItem("##agent_fh")) {
+                        ImGui::TextDisabled("Fight history — %s", r.name.c_str());
+                        ImGui::Separator();
+                        if (viewed_fight != 0) {
+                            if (ImGui::MenuItem("Current (live)")) {
+                                viewed_fight = 0;
+                                ImGui::CloseCurrentPopup();
+                            }
+                        }
+                        int n_hist = tracker().history_size();
+                        if (n_hist == 0) {
+                            ImGui::TextDisabled("(no past fights yet)");
+                        }
+                        for (int back = 1; back <= n_hist; ++back) {
+                            int storage_idx = n_hist - back;
+                            uint64_t fs_start = 0, fs_end = 0;
+                            tracker().fight_times_at(storage_idx, fs_start, fs_end);
+                            uint64_t dur = fs_end > fs_start ? fs_end - fs_start : 0;
+                            char dbuf[32];
+                            format_time(dbuf, sizeof(dbuf), dur);
+                            Snapshot ag{};
+                            char label[160];
+                            if (tracker().agent_snapshot_at(storage_idx, r.id, ag)) {
+                                char dpsbuf[16], dmgbuf[16];
+                                format_count(dpsbuf, sizeof(dpsbuf), ag.dps);
+                                format_count(dmgbuf, sizeof(dmgbuf), ag.damage_total);
+                                snprintf(label, sizeof(label),
+                                         "Fight -%d  (%s)   %s DPS   %s dmg",
+                                         back, dbuf, dpsbuf, dmgbuf);
+                            } else {
+                                snprintf(label, sizeof(label),
+                                         "Fight -%d  (%s)   (not present)",
+                                         back, dbuf);
+                            }
+                            bool selected = (viewed_fight == back);
+                            if (ImGui::MenuItem(label, nullptr, selected)) {
+                                viewed_fight = back;
+                                ImGui::CloseCurrentPopup();
+                            }
+                        }
+                        ImGui::EndPopup();
+                    }
                     ImGui::PopID();
                     ImGui::PopStyleColor();
                 }
@@ -338,7 +451,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
         draw_support_window("Strips",   &s.strips_open,   g_rows, &Snapshot::strip_count);
     }
     if (s.downs_open) draw_downs_window(&s.downs_open, g_rows);
-    draw_detail_window();
+    draw_detail_window(viewed_fight);
 
     prune_dps_cache(g_rows);
     return 0;

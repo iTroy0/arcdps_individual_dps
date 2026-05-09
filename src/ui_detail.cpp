@@ -36,11 +36,19 @@ bool consume_esc_for_detail() {
     return false;
 }
 
-void draw_detail_window() {
+void draw_detail_window(int viewed_history_idx) {
     auto& s = settings();
     if (!s.detail_open || g_selected_agent == 0) return;
 
-    tracker().detail(g_selected_agent, g_detail);
+    if (viewed_history_idx > 0) {
+        int hist_idx = tracker().history_size() - viewed_history_idx;
+        if (!tracker().detail_at(hist_idx, g_selected_agent, g_detail)) {
+            s.detail_open = false;
+            return;
+        }
+    } else {
+        tracker().detail(g_selected_agent, g_detail);
+    }
     const auto& d = g_detail;
     if (d.name.empty()) {
         s.detail_open = false;

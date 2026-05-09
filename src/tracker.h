@@ -91,6 +91,18 @@ struct AgentDetail {
     std::vector<SkillDetail> skills;
 };
 
+// Stored in Tracker::history_ when a fight closes (SQCOMBATEND or manual
+// reset). Keeps full agent state minus per-skill hits_history (cleared
+// before push) — the per-hit timeline is the only structure that grows
+// unbounded, so dropping it keeps each past fight under ~1 MB. Spike
+// overlay on the detail graph will be empty for past fights; everything
+// else (DPS curve, skills table totals, sort, support windows) works.
+struct FightSnapshot {
+    uint64_t                                  start_wall = 0;
+    uint64_t                                  end_wall   = 0;
+    std::unordered_map<uintptr_t, AgentState> agents;
+};
+
 struct Snapshot {
     uintptr_t   id;
     std::string name;
@@ -116,6 +128,24 @@ public:
     void snapshot(std::vector<Snapshot>& out) const;
     void detail(uintptr_t id, AgentDetail& out) const;
     void reset_fight();
+
+    // Past-fight history (B+C design). Index 0 = oldest stored fight,
+    // history_size()-1 = most recent past fight. Negative indices are
+    // not used; the UI translates "Fight -1, -2..." into these forward
+    // indices. See FightSnapshot for memory caveats.
+    int  history_size() const;
+    bool snapshot_at(int idx, std::vector<Snapshot>& out) const;
+    bool detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const;
+    bool fight_times_at(int idx, uint64_t& start_wall, uint64_t& end_wall) const;
+    // Single-agent past-fight readout for the per-row "fight history"
+    // context menu. Cheaper than calling snapshot_at + scanning.
+    bool agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) const;
+    // Top-N skills by damage. Cheap (no DamagePoint history copy) so safe
+    // to call every frame from a hover tooltip.
+    bool top_skills(uintptr_t agent_id, int n,
+                    std::vector<SkillDetail>& out) const;
+    bool top_skills_at(int idx, uintptr_t agent_id, int n,
+                       std::vector<SkillDetail>& out) const;
 
 private:
     void on_statechange(cbtevent* ev, ag* src, ag* dst);
@@ -149,6 +179,21 @@ private:
     std::unordered_set<uintptr_t>                   logged_targets_;
     bool                                            any_in_combat_   = false;
     bool                                            in_encounter_    = false;
+
+    // FIFO of past fights, capped at kHistoryMax. push_to_history()
+    // clones the current agents_ (clearing per-skill hits_history to
+    // bound memory) and appends. Read by the UI via snapshot_at /
+    // detail_at when the user navigates Fight -1, -2, ... in the main
+    // Damage window header.
+    static constexpr int                            kHistoryMax = 5;
+    std::deque<FightSnapshot>                       history_;
+    // Used as start_wall when pushing — set when the first agent enters
+    // combat and we haven't recorded the current fight yet. Reset to 0
+    // after push_to_history() runs so the next entry-into-combat
+    // captures a fresh start.
+    uint64_t                                        current_fight_start_wall_ = 0;
+
+    void push_to_history();
 };
 
 Tracker& tracker();

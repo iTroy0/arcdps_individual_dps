@@ -273,6 +273,10 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             }
             any_in_combat_ = false;
             in_encounter_ = false;
+            // Capture the just-closed fight to history. Fires for instance
+            // content (raids/strikes) where SQCOMBATEND is reliable. WvW
+            // doesn't fire it; manual Reset is the path there.
+            push_to_history();
             break;
         default:
             break;
@@ -309,6 +313,9 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
 
     any_in_combat_ = std::any_of(agents_.begin(), agents_.end(),
         [](const auto& p) { return p.second.in_combat_wall.has_value(); });
+    if (any_in_combat_ && current_fight_start_wall_ == 0) {
+        current_fight_start_wall_ = wall_now();
+    }
 }
 
 void Tracker::exit_combat(ag* src, uint64_t time) {
@@ -434,7 +441,11 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (!can_start && !any_in_combat_) return;
         if (has_fight_state(*owner)) reset_for_new_fight(*owner);
         owner->in_combat_wall = now;
+        bool was_idle = !any_in_combat_;
         any_in_combat_ = true;
+        if (was_idle && current_fight_start_wall_ == 0) {
+            current_fight_start_wall_ = now;
+        }
     } else if (!in_encounter_ && owner->last_damage_wall != 0) {
         // GW2 keeps the player in combat for ~4s after the last hit. If arc
         // never sent EXITCOMBAT, treat a long idle gap as a fight boundary
@@ -568,6 +579,9 @@ AgentState* Tracker::find_by_instid(uint16_t instid) {
 
 void Tracker::reset_fight() {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Capture the in-progress fight to history before wiping so the user
+    // doesn't lose just-completed stats by hitting Reset.
+    push_to_history();
     for (auto it = agents_.begin(); it != agents_.end(); ) {
         auto& s = it->second;
         if (!s.present && !s.is_self) {
@@ -597,6 +611,195 @@ void Tracker::reset_fight() {
     target_dmg_.clear();
     downed_.clear();
     any_in_combat_ = false;
+}
+
+void Tracker::push_to_history() {
+    // Caller holds mutex_. No-op when no fight has opened.
+    if (current_fight_start_wall_ == 0) return;
+
+    FightSnapshot fs;
+    fs.start_wall = current_fight_start_wall_;
+    fs.end_wall   = wall_now();
+
+    bool has_data = false;
+    for (const auto& [id, s] : agents_) {
+        if (!s.is_player) continue;
+        if (s.damage_total == 0 && s.strip_count == 0 &&
+            s.cleanse_count == 0 && s.damage_to_downed == 0 &&
+            s.downs_contributed == 0) continue;
+        // Clone, then drop per-skill hits_history to keep memory bounded.
+        // Spike overlay won't render for past fights; everything else
+        // (DPS curve, skills table, sort) still works because totals,
+        // first/last hit timestamps, and the DamagePoint history deque
+        // are preserved.
+        AgentState clone = s;
+        for (auto& [skid, sk] : clone.skills) {
+            std::deque<SkillHit> empty;
+            sk.hits_history.swap(empty);
+        }
+        fs.agents.emplace(id, std::move(clone));
+        has_data = true;
+    }
+
+    current_fight_start_wall_ = 0;
+    if (!has_data) return;
+
+    history_.push_back(std::move(fs));
+    while (static_cast<int>(history_.size()) > kHistoryMax) {
+        history_.pop_front();
+    }
+}
+
+int Tracker::history_size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<int>(history_.size());
+}
+
+bool Tracker::snapshot_at(int idx, std::vector<Snapshot>& out) const {
+    out.clear();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
+    const FightSnapshot& fs = history_[idx];
+    out.reserve(fs.agents.size());
+    for (const auto& [id, s] : fs.agents) {
+        if (!s.is_player) continue;
+        uint64_t ms = 0;
+        if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall) {
+            ms = s.last_damage_wall - s.first_damage_wall;
+        }
+        uint64_t denom = ms < 500 ? 500 : ms;
+        uint64_t dps   = s.damage_total * 1000ull / denom;
+        out.push_back(Snapshot{
+            s.id, s.name, s.prof, s.elite,
+            ms, s.damage_total, dps,
+            s.strip_count, s.cleanse_count,
+            s.damage_to_downed, s.downs_contributed,
+            false,           // past fights are never "in combat"
+            s.is_self,
+        });
+    }
+    return true;
+}
+
+bool Tracker::fight_times_at(int idx, uint64_t& start_wall,
+                             uint64_t& end_wall) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
+    start_wall = history_[idx].start_wall;
+    end_wall   = history_[idx].end_wall;
+    return true;
+}
+
+bool Tracker::agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
+    const FightSnapshot& fs = history_[idx];
+    auto it = fs.agents.find(agent_id);
+    if (it == fs.agents.end()) return false;
+    const auto& s = it->second;
+    if (!s.is_player) return false;
+    uint64_t ms = 0;
+    if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall) {
+        ms = s.last_damage_wall - s.first_damage_wall;
+    }
+    uint64_t denom = ms < 500 ? 500 : ms;
+    uint64_t dps   = s.damage_total * 1000ull / denom;
+    out = Snapshot{
+        s.id, s.name, s.prof, s.elite,
+        ms, s.damage_total, dps,
+        s.strip_count, s.cleanse_count,
+        s.damage_to_downed, s.downs_contributed,
+        false, s.is_self,
+    };
+    return true;
+}
+
+namespace {
+void fill_top_skills(const AgentState& s,
+                     const std::unordered_map<uint32_t, std::string>& names,
+                     int n, std::vector<SkillDetail>& out) {
+    out.clear();
+    std::vector<SkillDetail> all;
+    all.reserve(s.skills.size());
+    for (const auto& [skid, entry] : s.skills) {
+        if (entry.damage == 0) continue;
+        SkillDetail sd;
+        sd.skill_id       = skid;
+        auto nit = names.find(skid);
+        if (nit != names.end()) sd.name = nit->second;
+        sd.damage         = entry.damage;
+        sd.hits           = entry.hits;
+        sd.first_hit_wall = entry.first_hit_wall;
+        sd.last_hit_wall  = entry.last_hit_wall;
+        all.push_back(std::move(sd));
+    }
+    int top = std::min<int>(n, static_cast<int>(all.size()));
+    if (top == 0) return;
+    std::partial_sort(all.begin(), all.begin() + top, all.end(),
+        [](const SkillDetail& a, const SkillDetail& b) { return a.damage > b.damage; });
+    out.assign(std::make_move_iterator(all.begin()),
+               std::make_move_iterator(all.begin() + top));
+}
+} // namespace
+
+bool Tracker::top_skills(uintptr_t agent_id, int n,
+                         std::vector<SkillDetail>& out) const {
+    out.clear();
+    if (n <= 0) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = agents_.find(agent_id);
+    if (it == agents_.end()) return false;
+    fill_top_skills(it->second, skill_names_, n, out);
+    return !out.empty();
+}
+
+bool Tracker::top_skills_at(int idx, uintptr_t agent_id, int n,
+                            std::vector<SkillDetail>& out) const {
+    out.clear();
+    if (n <= 0) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
+    const FightSnapshot& fs = history_[idx];
+    auto it = fs.agents.find(agent_id);
+    if (it == fs.agents.end()) return false;
+    fill_top_skills(it->second, skill_names_, n, out);
+    return !out.empty();
+}
+
+bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
+    const FightSnapshot& fs = history_[idx];
+    auto it = fs.agents.find(agent_id);
+    if (it == fs.agents.end()) {
+        out.name.clear();
+        return false;
+    }
+    const auto& s = it->second;
+    out.name  = s.name;
+    out.prof  = s.prof;
+    out.elite = s.elite;
+    out.history.assign(s.history.begin(), s.history.end());
+    out.history_start_wall = !out.history.empty() ? out.history.front().wall_ms : 0;
+    out.skills.clear();
+    out.skills.reserve(s.skills.size());
+    for (const auto& [skid, entry] : s.skills) {
+        SkillDetail sd;
+        sd.skill_id       = skid;
+        auto nit = skill_names_.find(skid);
+        if (nit != skill_names_.end()) sd.name = nit->second;
+        sd.damage         = entry.damage;
+        sd.hits           = entry.hits;
+        sd.first_hit_wall = entry.first_hit_wall;
+        sd.last_hit_wall  = entry.last_hit_wall;
+        // entry.hits_history is empty by design (cleared on push_to_history)
+        sd.hits_history.assign(entry.hits_history.begin(),
+                               entry.hits_history.end());
+        out.skills.push_back(std::move(sd));
+    }
+    std::sort(out.skills.begin(), out.skills.end(),
+        [](const SkillDetail& a, const SkillDetail& b) { return a.damage > b.damage; });
+    return true;
 }
 
 void Tracker::detail(uintptr_t id, AgentDetail& out) const {
