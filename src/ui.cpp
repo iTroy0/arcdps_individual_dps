@@ -88,11 +88,24 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
 
     // Fight-history navigation. viewed_fight 0 = live current fight,
-    // 1 = most recent past fight, 2 = older, etc. Clamped to the deque
-    // size each frame so a FIFO drop doesn't leave the user pointing at
-    // a vanished entry.
+    // 1 = most recent past fight, 2 = older, etc. Anchored to the
+    // selected FightSnapshot by start_wall, not by relative index, so a
+    // new fight closing mid-view doesn't silently shift the user onto a
+    // different fight. If the anchored fight falls off the FIFO, snap
+    // back to live.
     int hist_n = tracker().history_size();
-    static int viewed_fight = 0;
+    static int      viewed_fight      = 0;
+    static uint64_t viewed_start_wall = 0;
+    if (viewed_fight > 0 && viewed_start_wall != 0) {
+        int relocated = 0;
+        for (int back = 1; back <= hist_n; ++back) {
+            uint64_t fs_s = 0, fs_e = 0;
+            tracker().fight_times_at(hist_n - back, fs_s, fs_e);
+            if (fs_s == viewed_start_wall) { relocated = back; break; }
+        }
+        viewed_fight = relocated;
+        if (viewed_fight == 0) viewed_start_wall = 0;
+    }
     if (viewed_fight > hist_n) viewed_fight = hist_n;
     if (viewed_fight < 0)      viewed_fight = 0;
 
@@ -153,7 +166,10 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             ImGui::Text("Viewing Fight -%d  (%s) - right-click a row to switch",
                         viewed_fight, dbuf);
             ImGui::SameLine();
-            if (ImGui::SmallButton("Live")) viewed_fight = 0;
+            if (ImGui::SmallButton("Live")) {
+                viewed_fight      = 0;
+                viewed_start_wall = 0;
+            }
             ImGui::Separator();
         }
 
@@ -337,7 +353,10 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     }
 
                     ImGui::PushStyleColor(ImGuiCol_Text, text_col);
-                    ImGui::PushID(static_cast<ImGuiID>(r.id));
+                    // Pointer overload hashes the full 64-bit agent id so
+                    // two agents whose low 32 bits collide can't alias
+                    // popup / selectable state.
+                    ImGui::PushID(reinterpret_cast<const void*>(r.id));
                     if (ImGui::Selectable(r.name.c_str(),
                                           selected_agent() == r.id && s.detail_open,
                                           ImGuiSelectableFlags_SpanAllColumns |
@@ -379,7 +398,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         ImGui::Separator();
                         if (viewed_fight != 0) {
                             if (ImGui::MenuItem("Current (live)")) {
-                                viewed_fight = 0;
+                                viewed_fight      = 0;
+                                viewed_start_wall = 0;
                                 ImGui::CloseCurrentPopup();
                             }
                         }
@@ -410,7 +430,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             }
                             bool selected = (viewed_fight == back);
                             if (ImGui::MenuItem(label, nullptr, selected)) {
-                                viewed_fight = back;
+                                viewed_fight      = back;
+                                viewed_start_wall = fs_start;
                                 ImGui::CloseCurrentPopup();
                             }
                         }

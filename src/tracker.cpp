@@ -132,6 +132,9 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
 
     if (!ev) {
         if (src && src->id) {
+            // arc api README: ev==null with src->prof truthy = tracking-add;
+            // src->prof == 0 = tracking-remove. (src->elite == 1 is a
+            // target-change for the active target window — not used here.)
             if (src->prof != 0 && src->elite != 0xFFFFFFFFu) {
                 if (!looks_like_player(src, dst)) return;
                 uint32_t prof = 0, elite = 0;
@@ -149,15 +152,20 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                     s.instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
                     instid_to_id_[s.instid] = src->id;
                 }
-            } else if (src->elite == 0xFFFFFFFFu) {
-                // Agent removed: keep state until fight reset, but drop the
-                // instid mapping so new instids can rebind.
+            } else if (src->prof == 0) {
+                // Tracking-remove. Keep accumulated stats until fight reset
+                // so the user can still see their row, but drop the instid
+                // mapping immediately so a new instid can rebind to a
+                // different agent without aliasing.
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) {
                     instid_to_id_.erase(it->second.instid);
                     it->second.present = false;
                 }
             }
+            // prof != 0 && elite == 0xFFFFFFFFu is an NPC/gadget
+            // tracking-add — intentionally ignored, tracker only carries
+            // players in agents_.
         }
         return;
     }
@@ -262,6 +270,25 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             // first credited damage), so a squadmate's pull cannot reset
             // rows for people not yet in combat.
             in_encounter_ = true;
+            break;
+        case CBTS_MAPCHANGE:
+            // Realtime signal that the local player changed maps. Squadmates
+            // from the previous map are no longer in range and arc won't
+            // re-fire tracking-remove for them. Mark all non-self agents
+            // absent so snapshot() drops them next frame instead of waiting
+            // for the 60s staleness fallback. push_to_history captures any
+            // partial fight in progress and (importantly) clears target_dmg_
+            // / downed_ so leftover attribution can't bleed into the next
+            // map's first pull.
+            push_to_history();
+            for (auto& [id, s] : agents_) {
+                if (s.is_self) continue;
+                s.present = false;
+                s.in_combat_wall.reset();
+            }
+            instid_to_id_.clear();
+            any_in_combat_ = false;
+            in_encounter_  = false;
             break;
         case CBTS_SQCOMBATEND:
             for (auto& [id, s] : agents_) {
@@ -642,6 +669,17 @@ void Tracker::push_to_history() {
     }
 
     current_fight_start_wall_ = 0;
+
+    // Drop fight-scoped per-target state so the NEXT fight starts clean.
+    // Without this, target_dmg_ entries from un-downed/un-killed targets
+    // (instance adds at SQCOMBATEND, ungibbed enemies at MAPCHANGE) leak
+    // into the next pull and inflate damage_to_downed / downs_contributed
+    // beyond the new fight's damage_total. reset_fight() also calls this
+    // path; the redundant clear there is harmless.
+    target_dmg_.clear();
+    downed_.clear();
+    logged_targets_.clear();
+
     if (!has_data) return;
 
     history_.push_back(std::move(fs));

@@ -55,9 +55,9 @@ arcdps_exports* mod_init() {
     g_exports.combat       = reinterpret_cast<void*>(&mod_combat);
     g_exports.imgui        = reinterpret_cast<void*>(&mod_imgui);
     g_exports.options_tab  = reinterpret_cast<void*>(&mod_options_end);
-    // combat_local is a strict duplicate of combat for self events — arc fires
-    // the same payload on both callbacks. Keeping the dispatch wired would
-    // double-count damage and combat time. Null pointer = arc skips the call.
+    // combat_local is arc's chatbox-only event stream (per arc api README:
+    // "same as combat, but for chatbox events"). Tracker has no chat-side
+    // use, so leave it null — arc skips the dispatch entirely.
     g_exports.combat_local    = nullptr;
     g_exports.wnd_nofilter    = reinterpret_cast<void*>(&mod_wnd_nofilter);
     g_exports.wnd_filter      = nullptr;

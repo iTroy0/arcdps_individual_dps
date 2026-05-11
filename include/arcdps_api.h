@@ -37,16 +37,16 @@ typedef struct cbtevent {
 } cbtevent;
 
 typedef struct ag {
-    char*     name;
-    uintptr_t id;
-    uint32_t  prof;
-    uint32_t  elite;
-    uint32_t  self;
-    uint16_t  team;
+    const char* name;
+    uintptr_t   id;
+    uint32_t    prof;
+    uint32_t    elite;
+    uint32_t    self;
+    uint16_t    team;
 } ag;
 
 typedef struct arcdps_exports {
-    uintptr_t   size;
+    uint64_t    size;
     uint32_t    sig;
     uint32_t    imguivers;
     const char* out_name;
