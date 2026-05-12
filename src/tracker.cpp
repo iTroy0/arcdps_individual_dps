@@ -430,18 +430,22 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     uint64_t delta = 0;
     if (ev->buff == 0) {
-        // Strike. Positive value only — arc's post-2026-04-14 feed encodes
-        // barrier-absorbed / invulnerable hits as negatives, which arc
-        // itself does not count toward DPS.
+        // Strike. Whitelist real HP damage results. arc's panel excludes
+        // defiance bar damage (CBTR_DEFIANCE_DAMAGENORMAL), skillcast
+        // metadata (CBTR_SKILLCAST), CC duration in ms (CBTR_CROWDCONTROL
+        // — surfaces as the "Generic Lockout" skill row), and invert
+        // (CBTR_INVERT) because `value` carries non-HP payloads there.
+        // Also drops negatives from arc's post-2026-04-14 feed which
+        // encodes barrier-absorbed / invulnerable hits as < 0.
         switch (ev->result) {
-            case CBTR_BLOCK:
-            case CBTR_EVADE:
-            case CBTR_INTERRUPT:
-            case CBTR_ABSORB:
-            case CBTR_BLIND:
+            case CBTR_STRIKE_DAMAGENORMAL:
+            case CBTR_STRIKE_DAMAGECRIT:
+            case CBTR_STRIKE_DAMAGEGLANCE:
+            case CBTR_KILLINGBLOW:
+            case CBTR_DOWNED:
+                if (ev->value > 0) delta = static_cast<uint64_t>(ev->value);
                 break;
             default:
-                if (ev->value > 0) delta = static_cast<uint64_t>(ev->value);
                 break;
         }
     } else {
