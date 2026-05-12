@@ -89,6 +89,11 @@ namespace {
         else if (k == "responsive_columns") s.responsive_columns = std::atoi(v.c_str()) != 0;
         else if (k == "body_borders")   s.body_borders   = std::atoi(v.c_str()) != 0;
         else if (k == "bar_full_row")   s.bar_full_row   = std::atoi(v.c_str()) != 0;
+        else if (k == "lock_windows")   s.lock_windows   = std::atoi(v.c_str()) != 0;
+        else if (k == "chart_smooth")   s.chart_smooth   = std::atoi(v.c_str()) != 0;
+        else if (k == "chart_cum")      s.chart_cum      = std::atoi(v.c_str()) != 0;
+        else if (k == "chart_avg")      s.chart_avg      = std::atoi(v.c_str()) != 0;
+        else if (k == "chart_burst")    s.chart_burst    = std::atoi(v.c_str()) != 0;
         else if (k == "pos_relative")   s.pos_relative   = std::atoi(v.c_str()) != 0;
         else if (k == "window_rx")      s.window_rx      = static_cast<float>(std::atof(v.c_str()));
         else if (k == "window_ry")      s.window_ry      = static_cast<float>(std::atof(v.c_str()));
@@ -180,6 +185,11 @@ void settings_save() {
     std::fprintf(f, "responsive_columns=%d\n", s.responsive_columns ? 1 : 0);
     std::fprintf(f, "body_borders=%d\n",    s.body_borders   ? 1 : 0);
     std::fprintf(f, "bar_full_row=%d\n",    s.bar_full_row   ? 1 : 0);
+    std::fprintf(f, "lock_windows=%d\n",    s.lock_windows   ? 1 : 0);
+    std::fprintf(f, "chart_smooth=%d\n",    s.chart_smooth   ? 1 : 0);
+    std::fprintf(f, "chart_cum=%d\n",       s.chart_cum      ? 1 : 0);
+    std::fprintf(f, "chart_avg=%d\n",       s.chart_avg      ? 1 : 0);
+    std::fprintf(f, "chart_burst=%d\n",     s.chart_burst    ? 1 : 0);
     std::fprintf(f, "pos_relative=%d\n",    s.pos_relative   ? 1 : 0);
     std::fprintf(f, "window_rx=%.4f\n",     s.window_rx);
     std::fprintf(f, "window_ry=%.4f\n",     s.window_ry);

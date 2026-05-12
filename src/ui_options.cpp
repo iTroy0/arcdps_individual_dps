@@ -100,6 +100,12 @@ void draw_layout_section() {
                  "viewport instead of absolute pixels, so the window "
                  "stays in roughly the same on-screen spot after "
                  "resolution changes or monitor swaps.");
+
+    bool lk = s.lock_windows;
+    if (ImGui::Checkbox("Lock windows (anchor)", &lk)) s.lock_windows = lk;
+    item_tooltip("Prevent move and resize on every plugin window so a "
+                 "stray drag can't relocate or shrink your overlay. Saved "
+                 "between sessions; toggle off to rearrange.");
 }
 
 // Window positions / sizes are intentionally preserved so a reset doesn't

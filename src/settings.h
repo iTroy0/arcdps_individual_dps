@@ -29,6 +29,17 @@ struct Settings {
     bool  body_borders    = false;
     bool  bar_full_row    = true;
 
+    // UI anchor: when on, all plugin windows refuse Move/Resize so they
+    // stay locked to their current position and size. Off by default.
+    bool  lock_windows    = false;
+
+    // Detail-graph layer visibility. Peak (raw 1s) line is always drawn;
+    // these four are click-toggleable via the legend chips.
+    bool  chart_smooth    = true;
+    bool  chart_cum       = true;
+    bool  chart_avg       = true;
+    bool  chart_burst     = true;
+
     // Clamped to [0.10, 1.0] on load.
     float window_alpha    = 0.95f;
 

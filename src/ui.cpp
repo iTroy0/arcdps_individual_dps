@@ -128,7 +128,10 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     for (const auto& r : g_rows) total_damage += r.damage_total;
 
     bool open = s.window_open;
-    if (ImGui::Begin("Damage", &open)) {
+    ImGuiWindowFlags lock_flags = s.lock_windows
+        ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
+        : 0;
+    if (ImGui::Begin("Damage", &open, lock_flags)) {
         ImVec2 pos  = ImGui::GetWindowPos();
         ImVec2 size = ImGui::GetWindowSize();
         capture_window_pos(pos, s.window_x, s.window_y,

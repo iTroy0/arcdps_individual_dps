@@ -26,7 +26,10 @@ void draw_support_window(const char* title, bool* open,
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(220, 180), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
-    if (ImGui::Begin(title, open)) {
+    ImGuiWindowFlags lock_flags = settings().lock_windows
+        ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
+        : 0;
+    if (ImGui::Begin(title, open, lock_flags)) {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags sup_flags =
             ImGuiTableFlags_RowBg |
@@ -114,7 +117,10 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(280, 200), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
-    if (ImGui::Begin("Down contribution", open)) {
+    ImGuiWindowFlags lock_flags = settings().lock_windows
+        ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
+        : 0;
+    if (ImGui::Begin("Down contribution", open, lock_flags)) {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags f =
             ImGuiTableFlags_RowBg |

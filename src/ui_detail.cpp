@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -67,6 +68,9 @@ void draw_detail_window(int viewed_history_idx) {
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
 
     bool open = s.detail_open;
+    // Detail window is intentionally exempt from lock_windows — the graph
+    // benefits from being resized to fit different fight lengths, and the
+    // user opens it on demand rather than as a persistent overlay.
     if (ImGui::Begin(title, &open)) {
         // ESC dismissal lives in mod_wnd_filter (exports.cpp) via
         // consume_esc_for_detail() — arc swallows ESC at the wndproc layer
@@ -103,27 +107,135 @@ void draw_detail_window(int viewed_history_idx) {
             samples.push_back(dps);
             if (dps > peak_dps) peak_dps = dps;
         }
+
+        // EMA-smoothed companion samples for the bell-shape visual line.
+        // Raw `samples` still drives peak_dps so the label reflects real 1s
+        // damage, not the lagged smoothed value.
+        std::vector<float> ema_samples;
+        ema_samples.reserve(samples.size());
+        {
+            constexpr float kEmaAlpha = 0.30f;
+            float ema = 0.0f;
+            for (size_t k = 0; k < samples.size(); ++k) {
+                ema = (k == 0) ? samples[0]
+                               : kEmaAlpha * samples[k]
+                                 + (1.0f - kEmaAlpha) * ema;
+                ema_samples.push_back(ema);
+            }
+        }
+
+        // Average DPS across the rendered history span — horizontal ref.
+        uint64_t total_dmg = 0;
+        uint64_t total_dt  = 0;
+        if (d.history.size() >= 2) {
+            total_dmg = d.history.back().damage_total
+                      - d.history.front().damage_total;
+            total_dt  = d.history.back().wall_ms
+                      - d.history.front().wall_ms;
+        }
+        float avg_dps = total_dt > 0
+                      ? static_cast<float>(total_dmg) * 1000.0f /
+                        static_cast<float>(total_dt)
+                      : 0.0f;
+
+        // Burst-window threshold: top 25% of samples. nth_element is O(n)
+        // — only the pivot matters, full sort is wasted work.
+        float burst_threshold = 0.0f;
+        if (samples.size() >= 4) {
+            std::vector<float> tmp = samples;
+            size_t pivot = tmp.size() * 3 / 4;
+            std::nth_element(tmp.begin(), tmp.begin() + pivot, tmp.end());
+            burst_threshold = tmp[pivot];
+        }
         const SkillDetail* sel_skill = nullptr;
         if (g_selected_skill != 0) {
             for (const auto& sk : d.skills) {
                 if (sk.skill_id == g_selected_skill) { sel_skill = &sk; break; }
             }
         }
+        ImGui::TextUnformatted("DPS over time");
         if (sel_skill) {
             const char* nm = !sel_skill->name.empty()
                            ? sel_skill->name.c_str() : "?";
-            ImGui::Text("DPS over time  peak: %.1fk  |  ",
-                        peak_dps / 1000.0f);
-            ImGui::SameLine(0, 0);
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 220, 90, 255));
             ImGui::Text("spike: %s (#%u)", nm, sel_skill->skill_id);
             ImGui::PopStyleColor();
-        } else {
-            ImGui::Text("DPS over time  peak: %.1fk", peak_dps / 1000.0f);
         }
 
-        const float axis_w  = 50.0f;
-        const float graph_h = 120.0f;
+        // Compact color legend — clickable chips toggle each plotted
+        // layer (peak chip is non-clickable; the raw 1s line is mandatory
+        // since it drives the peak value). Disabled chips render dimmed.
+        {
+            auto fmt = [](char* b, size_t n, float v) {
+                if (v >= 1000.0f) std::snprintf(b, n, "%.1fk", v / 1000.0f);
+                else              std::snprintf(b, n, "%.0f", v);
+            };
+            char pbuf[16], abuf[16];
+            fmt(pbuf, sizeof(pbuf), peak_dps);
+            fmt(abuf, sizeof(abuf), avg_dps);
+            // chip(col, toggle_or_null, "fmt", args...). null toggle = no
+            // click handling, no dim state.
+            auto chip = [&](ImU32 col, bool* toggle, const char* fmt_str,
+                            auto&&... args) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), fmt_str, args...);
+                bool enabled = toggle ? *toggle : true;
+
+                float h   = ImGui::GetTextLineHeight();
+                float sz  = h * 0.55f;
+                float gap = 4.0f;
+                ImVec2 ts = ImGui::CalcTextSize(buf);
+                float chip_w = sz + gap + ts.x;
+
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                bool hovered = false;
+                if (toggle) {
+                    ImGui::PushID(buf);
+                    if (ImGui::InvisibleButton("##chip",
+                                               ImVec2(chip_w, h))) {
+                        *toggle = !*toggle;
+                    }
+                    hovered = ImGui::IsItemHovered();
+                    ImGui::PopID();
+                } else {
+                    ImGui::Dummy(ImVec2(chip_w, h));
+                }
+
+                auto* dl = ImGui::GetWindowDrawList();
+                if (hovered) {
+                    dl->AddRectFilled({p.x - 2, p.y},
+                                      {p.x + chip_w + 2, p.y + h},
+                                      IM_COL32(255, 255, 255, 28), 2.0f);
+                }
+                ImU32 sw = enabled
+                         ? col
+                         : ((col & 0x00FFFFFFu) | (0x40u << 24));
+                float y0 = p.y + (h - sz) * 0.5f;
+                dl->AddRectFilled({p.x, y0}, {p.x + sz, y0 + sz}, sw);
+                ImU32 tc = enabled
+                         ? IM_COL32(220, 220, 220, 255)
+                         : IM_COL32(120, 120, 120, 255);
+                dl->AddText({p.x + sz + gap, p.y}, tc, buf);
+
+                ImGui::SameLine(0, 12);
+            };
+            chip(IM_COL32(110, 180, 255, 255), nullptr,         "peak %s", pbuf);
+            chip(IM_COL32(255, 180,  90, 255), &s.chart_smooth, "smooth");
+            chip(IM_COL32( 90, 220, 140, 255), &s.chart_cum,    "cum");
+            chip(IM_COL32(200, 200, 200, 255), &s.chart_avg,    "avg %s", abuf);
+            chip(IM_COL32(255, 200,  90, 255), &s.chart_burst,  "burst");
+            ImGui::NewLine();
+            // Breathing room so the legend's "peak %s" chip doesn't crowd
+            // the Y-axis peak label sitting right below at graph top.
+            ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        }
+
+        const float axis_w   = 50.0f;
+        const float graph_h  = 120.0f;
+        const float xaxis_h  = 14.0f; // reserved strip below graph for time labels
         float total_w = ImGui::GetContentRegionAvail().x;
         float graph_w = total_w - axis_w;
         if (!samples.empty() && peak_dps > 0.0f && graph_w > 20.0f) {
@@ -133,11 +245,79 @@ void draw_detail_window(int viewed_history_idx) {
             auto* dl = ImGui::GetWindowDrawList();
 
             // InvisibleButton first so visuals render on top of the hit rect.
-            ImGui::InvisibleButton("##graph", ImVec2(total_w, graph_h));
+            // Extra xaxis_h reserves space below the plot for time labels.
+            ImGui::InvisibleButton("##graph", ImVec2(total_w, graph_h + xaxis_h));
             bool hovered = ImGui::IsItemHovered();
 
             dl->AddRectFilled(graph_p0, graph_p1, IM_COL32(20, 20, 20, 180));
             dl->AddRect      (graph_p0, graph_p1, IM_COL32(80, 80, 80, 255));
+
+            const int n = static_cast<int>(samples.size());
+
+            // Burst-window shading: faint tint over contiguous spans of
+            // samples in the top-25% DPS band. Drawn before grids/lines so
+            // it sits in the background.
+            if (s.chart_burst && burst_threshold > 0.0f && n > 1) {
+                const ImU32 burst_col = IM_COL32(255, 200, 90, 26);
+                int span_start = -1;
+                auto flush = [&](int span_end) {
+                    float t0 = static_cast<float>(span_start) /
+                               static_cast<float>(n - 1);
+                    float t1 = static_cast<float>(span_end) /
+                               static_cast<float>(n - 1);
+                    dl->AddRectFilled(
+                        {graph_p0.x + t0 * graph_w, graph_p0.y},
+                        {graph_p0.x + t1 * graph_w, graph_p1.y},
+                        burst_col);
+                    span_start = -1;
+                };
+                for (int i = 0; i < n; ++i) {
+                    bool above = samples[i] >= burst_threshold;
+                    if (above && span_start < 0) span_start = i;
+                    else if (!above && span_start >= 0) flush(i - 1);
+                }
+                if (span_start >= 0) flush(n - 1);
+            }
+
+            // Vertical grid + bottom time labels. Step snaps to a "nice"
+            // value (1s/2s/5s/10s/30s/1m/5m) targeting ~8 ticks across the
+            // fight duration so long pulls don't crowd labels.
+            if (d.history.size() >= 2) {
+                uint64_t t_start = d.history.front().wall_ms;
+                uint64_t t_end   = d.history.back().wall_ms;
+                uint64_t span_ms = t_end > t_start ? t_end - t_start : 0;
+                if (span_ms > 0) {
+                    const ImU32 vgrid_col = IM_COL32(60, 60, 60, 180);
+                    const ImU32 xlbl_col  = IM_COL32(170, 170, 170, 255);
+                    constexpr uint64_t snaps[] = {
+                        1000, 2000, 5000, 10000, 30000, 60000, 300000
+                    };
+                    uint64_t target = span_ms / 8;
+                    if (target < 1000) target = 1000;
+                    uint64_t step = snaps[sizeof(snaps)/sizeof(snaps[0]) - 1];
+                    for (uint64_t snap : snaps) {
+                        if (snap >= target) { step = snap; break; }
+                    }
+                    for (uint64_t t_ms = step; t_ms < span_ms; t_ms += step) {
+                        float t = static_cast<float>(t_ms) /
+                                  static_cast<float>(span_ms);
+                        float x = graph_p0.x + t * graph_w;
+                        dl->AddLine({x, graph_p0.y}, {x, graph_p1.y},
+                                    vgrid_col, 1.0f);
+                        char tlbl[16];
+                        if (t_ms >= 60000)
+                            std::snprintf(tlbl, sizeof(tlbl), "%llum%llus",
+                                static_cast<unsigned long long>(t_ms / 60000),
+                                static_cast<unsigned long long>((t_ms % 60000) / 1000));
+                        else
+                            std::snprintf(tlbl, sizeof(tlbl), "%llus",
+                                static_cast<unsigned long long>(t_ms / 1000));
+                        ImVec2 ts = ImGui::CalcTextSize(tlbl);
+                        dl->AddText({x - ts.x * 0.5f, graph_p1.y + 2.0f},
+                                    xlbl_col, tlbl);
+                    }
+                }
+            }
 
             const ImU32 grid_col  = IM_COL32(60, 60, 60, 255);
             const ImU32 label_col = IM_COL32(180, 180, 180, 255);
@@ -154,7 +334,81 @@ void draw_detail_window(int viewed_history_idx) {
                 dl->AddText({graph_p0.x - ts.x - 4.0f, y - ts.y * 0.5f}, label_col, lbl);
             }
 
-            const int n = static_cast<int>(samples.size());
+            // Average-DPS dashed horizontal line + right-anchored label.
+            if (s.chart_avg && avg_dps > 0.0f && avg_dps < peak_dps) {
+                float y = graph_p1.y - (avg_dps / peak_dps) * graph_h;
+                const ImU32 avg_col = IM_COL32(200, 200, 200, 160);
+                const float dash = 6.0f, gap = 4.0f;
+                for (float x = graph_p0.x; x < graph_p1.x; x += dash + gap) {
+                    float x2 = x + dash;
+                    if (x2 > graph_p1.x) x2 = graph_p1.x;
+                    dl->AddLine({x, y}, {x2, y}, avg_col, 1.0f);
+                }
+                char abuf[16];
+                if (avg_dps >= 1000.0f)
+                    std::snprintf(abuf, sizeof(abuf), "avg %.1fk", avg_dps / 1000.0f);
+                else
+                    std::snprintf(abuf, sizeof(abuf), "avg %.0f", avg_dps);
+                ImVec2 ats = ImGui::CalcTextSize(abuf);
+                dl->AddText({graph_p1.x - ats.x - 4.0f, y - ats.y - 2.0f},
+                            avg_col, abuf);
+            }
+
+            // Area fill under the raw DPS line — flat alpha tint, two
+            // triangles per segment.
+            if (n > 1) {
+                const ImU32 fill_col = IM_COL32(110, 180, 255, 40);
+                for (int i = 0; i < n - 1; ++i) {
+                    float t0 = static_cast<float>(i)     / static_cast<float>(n - 1);
+                    float t1 = static_cast<float>(i + 1) / static_cast<float>(n - 1);
+                    float x0 = graph_p0.x + t0 * graph_w;
+                    float x1 = graph_p0.x + t1 * graph_w;
+                    float y0 = graph_p1.y - (samples[i]     / peak_dps) * graph_h;
+                    float y1 = graph_p1.y - (samples[i + 1] / peak_dps) * graph_h;
+                    dl->AddTriangleFilled({x0, y0}, {x1, y1}, {x1, graph_p1.y}, fill_col);
+                    dl->AddTriangleFilled({x0, y0}, {x1, graph_p1.y}, {x0, graph_p1.y}, fill_col);
+                }
+            }
+
+            // Cumulative damage curve — back layer, green. Scaled to its
+            // own peak (total damage in the rendered span), independent
+            // of the DPS Y-axis. Sample index k = history index - 1, so
+            // x mapping matches the DPS line.
+            if (s.chart_cum && d.history.size() >= 2 && total_dmg > 0) {
+                const ImU32 cum_col = IM_COL32(90, 220, 140, 160);
+                uint64_t base = d.history.front().damage_total;
+                size_t hn = d.history.size();
+                for (size_t i = 1; i + 1 < hn; ++i) {
+                    float t0 = static_cast<float>(i - 1) / static_cast<float>(n - 1);
+                    float t1 = static_cast<float>(i)     / static_cast<float>(n - 1);
+                    float v0 = static_cast<float>(d.history[i].damage_total - base) /
+                               static_cast<float>(total_dmg);
+                    float v1 = static_cast<float>(d.history[i + 1].damage_total - base) /
+                               static_cast<float>(total_dmg);
+                    float y0 = graph_p1.y - v0 * graph_h;
+                    float y1 = graph_p1.y - v1 * graph_h;
+                    dl->AddLine({graph_p0.x + t0 * graph_w, y0},
+                                {graph_p0.x + t1 * graph_w, y1},
+                                cum_col, 1.0f);
+                }
+            }
+
+            // EMA smoothed companion line — mid layer, orange. Provides
+            // arc-like bell shape while raw line below still shows bursts.
+            if (s.chart_smooth && n > 1) {
+                const ImU32 ema_col = IM_COL32(255, 180, 90, 200);
+                for (int i = 0; i < n - 1; ++i) {
+                    float t0 = static_cast<float>(i)     / static_cast<float>(n - 1);
+                    float t1 = static_cast<float>(i + 1) / static_cast<float>(n - 1);
+                    float y0 = graph_p1.y - (ema_samples[i]     / peak_dps) * graph_h;
+                    float y1 = graph_p1.y - (ema_samples[i + 1] / peak_dps) * graph_h;
+                    dl->AddLine({graph_p0.x + t0 * graph_w, y0},
+                                {graph_p0.x + t1 * graph_w, y1},
+                                ema_col, 1.5f);
+                }
+            }
+
+            // Raw 1s DPS line — front layer, blue. Drives the peak label.
             for (int i = 0; i < n - 1; ++i) {
                 float t0 = static_cast<float>(i)     / static_cast<float>(n - 1);
                 float t1 = static_cast<float>(i + 1) / static_cast<float>(n - 1);
