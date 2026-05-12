@@ -91,6 +91,11 @@ void draw_detail_window(int viewed_history_idx) {
                             ? d.history[i].wall_ms - 1000 : 0;
             size_t j = i;
             while (j > 0 && d.history[j - 1].wall_ms >= target) --j;
+            // When the previous sample falls outside the 1s window (sparse
+            // events, common on condi fights between tick clusters), back
+            // off one step so dd reflects the damage rate across the gap
+            // instead of dropping the line to zero.
+            if (j == i && i > 0) j = i - 1;
             uint64_t dd = d.history[i].damage_total - d.history[j].damage_total;
             uint64_t dt = d.history[i].wall_ms      - d.history[j].wall_ms;
             if (dt < 1000) dt = 1000;  // floor to 1s window
