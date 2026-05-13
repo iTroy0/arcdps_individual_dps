@@ -13,12 +13,13 @@
 
 namespace idps {
 
-namespace {
-
 // Compare two dotted-numeric version strings. Returns >0 if a > b, 0 if
 // equal, <0 if a < b. Non-numeric segments compare zero. Tolerant of
-// missing trailing components ("0.4" == "0.4.0").
+// missing trailing components ("0.4" == "0.4.0") and a leading "v" on
+// either side.
 int compare_semver(const char* a, const char* b) {
+    if (a && (*a == 'v' || *a == 'V')) ++a;
+    if (b && (*b == 'v' || *b == 'V')) ++b;
     while (*a || *b) {
         unsigned na = 0, nb = 0;
         while (*a >= '0' && *a <= '9') { na = na * 10 + (*a - '0'); ++a; }
@@ -32,6 +33,8 @@ int compare_semver(const char* a, const char* b) {
     }
     return 0;
 }
+
+namespace {
 
 bool fetch_latest_release_json(std::string& out) {
     HINTERNET session = WinHttpOpen(

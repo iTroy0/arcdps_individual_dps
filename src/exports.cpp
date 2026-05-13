@@ -1,6 +1,7 @@
 #include "exports.h"
 
 #include <imgui.h>
+#include <string>
 #include <windows.h>
 
 #include "arcdps_api.h"
@@ -11,6 +12,7 @@
 #include "tracker.h"
 #include "ui.h"
 #include "ui_detail.h"
+#include "update.h"
 
 namespace idps {
 
@@ -20,6 +22,9 @@ namespace {
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = "0.7.0";
     constexpr const char* kBuild   = "0.7.0 (" __DATE__ " " __TIME__ ")";
+
+    bool        g_update_banner   = false;
+    std::string g_update_previous;
 
     // arc's raw WndProc hook. Return convention: `msg` = pass through,
     // 0 = consume so neither arc nor GW2 see it. Returning 0 in the
@@ -34,15 +39,44 @@ namespace {
         }
         return msg;
     }
+
+    // Compare ini's last_seen_version against the kVersion baked into
+    // this freshly-loaded DLL. A strictly newer kVersion means arc just
+    // swapped us in via get_update_url; record the previous version,
+    // raise the banner flag, and persist the new baseline so the banner
+    // fires only once per upgrade. First run (empty ini field) just
+    // seeds the baseline without nagging.
+    void detect_post_update_banner() {
+        auto& s = settings();
+        if (s.last_seen_version.empty()) {
+            s.last_seen_version = kVersion;
+            settings_save();
+            return;
+        }
+        if (s.last_seen_version == kVersion) return;
+        if (compare_semver(kVersion, s.last_seen_version.c_str()) > 0) {
+            g_update_previous = s.last_seen_version;
+            g_update_banner   = true;
+            log_line("update banner: %s -> %s",
+                     g_update_previous.c_str(), kVersion);
+        }
+        s.last_seen_version = kVersion;
+        settings_save();
+    }
 }
 
 const char* version() { return kVersion; }
+
+bool        update_banner_visible()      { return g_update_banner; }
+const char* update_banner_prev_version() { return g_update_previous.c_str(); }
+void        update_banner_dismiss()      { g_update_banner = false; }
 
 arcdps_exports* mod_init() {
     log_init();
     log_line("mod_init name=%s build=%s", kName, kBuild);
 
     settings_load();
+    detect_post_update_banner();
     const auto& s = settings();
     options().exclude_npcs.store(s.exclude_npcs, std::memory_order_relaxed);
     options().exclude_gadgets.store(s.exclude_gadgets, std::memory_order_relaxed);

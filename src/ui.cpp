@@ -10,7 +10,9 @@
 #include <unordered_set>
 #include <vector>
 #include <windows.h>
+#include <shellapi.h>
 
+#include "exports.h"
 #include "icons.h"
 #include "settings.h"
 #include "tracker.h"
@@ -154,6 +156,36 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 ImGui::TextDisabled("(viewing past - go to Current to reset)");
             }
             ImGui::EndPopup();
+        }
+
+        // One-shot "Updated to vX" banner shown the first launch after
+        // arc auto-applies a newer release. Dismissed by the user; the
+        // ini baseline is already persisted at detection time so it does
+        // not re-fire for the same upgrade.
+        if (update_banner_visible()) {
+            const char* prev = update_banner_prev_version();
+            if (prev && *prev) {
+                ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f),
+                                   "Updated to v%s (was v%s)",
+                                   version(), prev);
+            } else {
+                ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f),
+                                   "Updated to v%s", version());
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Notes##update_notes")) {
+                char url[256];
+                std::snprintf(url, sizeof(url),
+                              "https://github.com/iTroy0/arcdps_individual_dps/releases/tag/v%s",
+                              version());
+                ShellExecuteA(nullptr, "open", url,
+                              nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x##update_dismiss")) {
+                update_banner_dismiss();
+            }
+            ImGui::Separator();
         }
 
         // Past-fight state line. Only renders when viewing history so live

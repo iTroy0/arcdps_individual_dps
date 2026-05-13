@@ -110,6 +110,7 @@ namespace {
             if (a > 1.00f) a = 1.00f;
             s.window_alpha = a;
         }
+        else if (k == "last_seen_version") s.last_seen_version = v;
     }
 
     // Clamp window geometry after load so a corrupted ini can't park a
@@ -201,6 +202,7 @@ void settings_save() {
     std::fprintf(f, "detail_w=%.1f\n",      s.detail_w);
     std::fprintf(f, "detail_h=%.1f\n",      s.detail_h);
     std::fprintf(f, "window_alpha=%.2f\n",  s.window_alpha);
+    std::fprintf(f, "last_seen_version=%s\n", s.last_seen_version.c_str());
     std::fflush(f);
     std::fclose(f);
     MoveFileExA(tmp_path.c_str(), final_path.c_str(),

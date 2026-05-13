@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace idps {
 
 struct Settings {
@@ -57,6 +59,11 @@ struct Settings {
     float detail_y        = -1.0f;
     float detail_w        = 420.0f;
     float detail_h        = 420.0f;
+
+    // Persisted across launches; used by exports.cpp to detect a version
+    // bump that arc applied via get_update_url and surface a one-shot
+    // "Updated to vX.Y.Z" banner in the main window.
+    std::string last_seen_version;
 };
 
 Settings& settings();
