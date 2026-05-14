@@ -9,6 +9,7 @@
 #include <locale.h>
 #include <string>
 #include <windows.h>
+#include "log.h"
 #include "util.h"
 
 namespace idps {
@@ -205,8 +206,14 @@ void settings_save() {
     std::fprintf(f, "last_seen_version=%s\n", s.last_seen_version.c_str());
     std::fflush(f);
     std::fclose(f);
-    MoveFileExA(tmp_path.c_str(), final_path.c_str(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!MoveFileExA(tmp_path.c_str(), final_path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        // Move failed (destination locked, cross-volume, ...). The live ini
+        // is untouched; drop the orphaned .tmp so it isn't mistaken for a
+        // real file later.
+        log_line("settings_save: MoveFileEx failed (err=%lu)", GetLastError());
+        DeleteFileA(tmp_path.c_str());
+    }
 }
 
 } // namespace idps

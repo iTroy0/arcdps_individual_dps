@@ -4,6 +4,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -15,44 +16,73 @@
 namespace idps {
 
 namespace {
-    uintptr_t   g_selected_agent = 0;
-    AgentDetail g_detail;
+    // g_selected_agent is written by the render thread (set_selected_agent,
+    // from mod_imgui) and read by the window thread (consume_esc_for_detail,
+    // from mod_wnd_nofilter) — atomic so cross-thread access is not a race.
+    std::atomic<uintptr_t> g_selected_agent{0};
+    AgentDetail            g_detail;
 
     // 0 = nothing selected. Drives the spike overlay on the DPS graph.
+    // Render-thread only.
     uint32_t    g_selected_skill = 0;
+
+    // ESC handoff: the window thread cannot touch Settings directly (the
+    // render thread owns it), so consume_esc_for_detail just raises a
+    // request and draw_detail_window applies it on the next frame.
+    // g_detail_visible is published by the render thread so the window
+    // thread knows whether an ESC press should be consumed.
+    std::atomic<bool> g_detail_visible{false};
+    std::atomic<bool> g_esc_close_request{false};
 }
 
 void      set_selected_agent(uintptr_t id) {
-    if (g_selected_agent != id) g_selected_skill = 0;
-    g_selected_agent = id;
+    if (g_selected_agent.load(std::memory_order_relaxed) != id)
+        g_selected_skill = 0;
+    g_selected_agent.store(id, std::memory_order_relaxed);
 }
-uintptr_t selected_agent()                 { return g_selected_agent; }
+uintptr_t selected_agent() {
+    return g_selected_agent.load(std::memory_order_relaxed);
+}
 
 bool consume_esc_for_detail() {
-    auto& s = settings();
-    if (s.detail_open && g_selected_agent != 0) {
-        s.detail_open = false;
-        return true;
-    }
-    return false;
+    // Window/message thread. Reads only atomics; the actual Settings write
+    // happens on the render thread in draw_detail_window.
+    if (!g_detail_visible.load(std::memory_order_acquire)) return false;
+    g_esc_close_request.store(true, std::memory_order_release);
+    return true;
 }
 
 void draw_detail_window(int viewed_history_idx) {
     auto& s = settings();
-    if (!s.detail_open || g_selected_agent == 0) return;
+
+    // Apply a pending ESC-close request from the window thread, then keep
+    // g_detail_visible in sync with the real open state on every exit path
+    // so the window thread's consume_esc_for_detail stays accurate.
+    if (g_esc_close_request.exchange(false, std::memory_order_acq_rel)) {
+        s.detail_open = false;
+    }
+    const uintptr_t sel = g_selected_agent.load(std::memory_order_relaxed);
+    auto publish_visible = [&]() {
+        g_detail_visible.store(s.detail_open && sel != 0,
+                               std::memory_order_release);
+    };
+
+    if (!s.detail_open || sel == 0) { publish_visible(); return; }
 
     if (viewed_history_idx > 0) {
         int hist_idx = tracker().history_size() - viewed_history_idx;
-        if (!tracker().detail_at(hist_idx, g_selected_agent, g_detail)) {
+        if (!tracker().detail_at(hist_idx, sel, g_detail)) {
             s.detail_open = false;
+            publish_visible();
             return;
         }
     } else {
-        tracker().detail(g_selected_agent, g_detail);
+        tracker().detail(sel, g_detail);
     }
     const auto& d = g_detail;
     if (d.name.empty()) {
         s.detail_open = false;
+        publish_visible();
         return;
     }
 
@@ -495,7 +525,6 @@ void draw_detail_window(int viewed_history_idx) {
         ImGui::Separator();
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags sk_flags =
-            ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
             ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
@@ -592,6 +621,7 @@ void draw_detail_window(int viewed_history_idx) {
     }
     ImGui::End();
     s.detail_open = open;
+    publish_visible();
 }
 
 } // namespace idps

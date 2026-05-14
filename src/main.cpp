@@ -31,12 +31,8 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     HANDLE /*arcdll*/,
     void* mallocfn,
     void* freefn,
-    uint32_t imguiversion) {
+    uint32_t /*imguiversion*/) {
     idps::log_init();
-    // Log arc's IMGUI_VERSION_NUM (7th arg, formerly d3d version) vs our
-    // own pin so any future mismatch surfaces in the log directly.
-    idps::log_line("get_init_addr imgui_arc=%u imgui_self=%u",
-                   imguiversion, IMGUI_VERSION_NUM);
     // Set allocator before SetCurrentContext so plugin's ImGui copy
     // allocates through arcdps's arena.
     if (mallocfn && freefn) {
@@ -68,7 +64,9 @@ extern "C" __declspec(dllexport) void* get_init_addr(
     return reinterpret_cast<void*>(&idps::mod_init);
 }
 
-extern "C" __declspec(dllexport) void* get_release_addr() {
+extern "C" __declspec(dllexport) void* get_release_addr(uint32_t /*reason*/) {
+    // reason is of enum n_arcdpsextensionload (see references/README_API.md)
+    // — the unload cause. Not acted on; mod_release tears down regardless.
     return reinterpret_cast<void*>(&idps::mod_release);
 }
 

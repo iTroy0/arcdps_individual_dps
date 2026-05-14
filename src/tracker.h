@@ -7,7 +7,6 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "arcdps_api.h"
@@ -159,8 +158,7 @@ private:
     AgentState* touch_agent(ag* src);
     AgentState* find_by_instid(uint16_t instid);
 
-    // mutex_ guards agents_/instid_to_id_/skill_names_/target_dmg_/downed_/
-    // logged_targets_.
+    // mutex_ guards agents_/instid_to_id_/skill_names_/target_dmg_/downed_.
     mutable std::mutex                              mutex_;
     std::unordered_map<uintptr_t, AgentState>       agents_;
     std::unordered_map<uint16_t, uintptr_t>         instid_to_id_;
@@ -175,8 +173,6 @@ private:
     // subsequent damage event on them carries is_offcycle == 1 per the evtc
     // spec. Realtime-safe for non-squad targets where CHANGEDOWN never fires.
     std::unordered_map<uintptr_t, bool>             downed_;
-    // Cleared on reset_fight so a new pull re-logs target classification.
-    std::unordered_set<uintptr_t>                   logged_targets_;
     bool                                            any_in_combat_   = false;
     bool                                            in_encounter_    = false;
 

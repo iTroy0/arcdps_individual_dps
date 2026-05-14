@@ -214,7 +214,6 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
         ImGuiTableFlags table_flags =
-            ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
             ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;

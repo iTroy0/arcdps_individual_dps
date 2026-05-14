@@ -32,7 +32,6 @@ void draw_support_window(const char* title, bool* open,
     if (ImGui::Begin(title, open, lock_flags)) {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags sup_flags =
-            ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
             ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
@@ -123,7 +122,6 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
     if (ImGui::Begin("Down contribution", open, lock_flags)) {
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags f =
-            ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
             ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;

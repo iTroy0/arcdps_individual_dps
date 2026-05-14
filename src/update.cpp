@@ -14,9 +14,9 @@
 namespace idps {
 
 // Compare two dotted-numeric version strings. Returns >0 if a > b, 0 if
-// equal, <0 if a < b. Non-numeric segments compare zero. Tolerant of
-// missing trailing components ("0.4" == "0.4.0") and a leading "v" on
-// either side.
+// equal, <0 if a < b. Tolerant of missing trailing components
+// ("0.4" == "0.4.0") and a leading "v" on either side. A pre-release
+// suffix ranks below the matching release ("1.0.0-rc1" < "1.0.0").
 int compare_semver(const char* a, const char* b) {
     if (a && (*a == 'v' || *a == 'V')) ++a;
     if (b && (*b == 'v' || *b == 'V')) ++b;
@@ -28,8 +28,15 @@ int compare_semver(const char* a, const char* b) {
         if (*a == '.') ++a;
         if (*b == '.') ++b;
         if (!*a && !*b) break;
-        if (*a && (*a < '0' || *a > '9') && *a != '.') break;
-        if (*b && (*b < '0' || *b > '9') && *b != '.') break;
+        // A pre-release suffix ("-rc1", "-beta") on one side only: the side
+        // without a suffix is the final release and ranks higher, per
+        // semver ("1.0.0-rc1" < "1.0.0"). Numeric parts so far are equal.
+        bool a_suffix = *a && (*a < '0' || *a > '9') && *a != '.';
+        bool b_suffix = *b && (*b < '0' || *b > '9') && *b != '.';
+        if (a_suffix || b_suffix) {
+            if (a_suffix && b_suffix) return 0; // both pre-release, treat equal
+            return a_suffix ? -1 : 1;           // suffixed side is lower
+        }
     }
     return 0;
 }
@@ -125,8 +132,6 @@ const wchar_t* check_for_update(const char* current_version) {
     if (*remote == 'v' || *remote == 'V') ++remote;
 
     if (compare_semver(remote, current_version) <= 0) {
-        log_line("update check: up-to-date (current=%s remote=%s)",
-                 current_version, remote);
         return nullptr;
     }
 
@@ -136,8 +141,6 @@ const wchar_t* check_for_update(const char* current_version) {
         tag.c_str());
     if (written <= 0) return nullptr;
 
-    log_line("update check: newer release %s available (current=%s)",
-             tag.c_str(), current_version);
     return url_buf;
 }
 

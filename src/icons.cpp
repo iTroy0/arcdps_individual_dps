@@ -16,7 +16,6 @@
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
-#include "log.h"
 #include "util.h"
 
 namespace idps {
@@ -194,7 +193,6 @@ void icons_ensure_loaded(const std::string& icons_dir) {
             try_load(dir, stem);
         }
     }
-    log_line("icons loaded=%zu", g_views.size());
 }
 
 void icons_shutdown() {

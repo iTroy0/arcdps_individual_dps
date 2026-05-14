@@ -19,9 +19,14 @@ namespace idps {
 namespace {
     arcdps_exports g_exports{};
     constexpr uint32_t kPluginSig = 0x1D9A2E01u; // "individual dps" — avoid collisions
+    // Single source of truth for the version string. Bump this one line
+    // per release. kVersion is read at runtime (idps::version(), the
+    // get_update_url semver compare); kBuild is arc's out_build display.
+    #define IDPS_VERSION "0.7.3"
     constexpr const char* kName    = "individual_dps";
-    constexpr const char* kVersion = "0.7.2";
-    constexpr const char* kBuild   = "0.7.2 (" __DATE__ " " __TIME__ ")";
+    constexpr const char* kVersion = IDPS_VERSION;
+    constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";
+    #undef IDPS_VERSION
 
     bool        g_update_banner   = false;
     std::string g_update_previous;
@@ -57,8 +62,6 @@ namespace {
         if (compare_semver(kVersion, s.last_seen_version.c_str()) > 0) {
             g_update_previous = s.last_seen_version;
             g_update_banner   = true;
-            log_line("update banner: %s -> %s",
-                     g_update_previous.c_str(), kVersion);
         }
         s.last_seen_version = kVersion;
         settings_save();
@@ -73,7 +76,6 @@ void        update_banner_dismiss()      { g_update_banner = false; }
 
 arcdps_exports* mod_init() {
     log_init();
-    log_line("mod_init name=%s build=%s", kName, kBuild);
 
     settings_load();
     detect_post_update_banner();
@@ -105,7 +107,6 @@ uintptr_t mod_release() {
     s.exclude_gadgets = options().exclude_gadgets.load(std::memory_order_relaxed);
     settings_save();
 
-    log_line("mod_release");
     icons_shutdown();
     log_shutdown();
     return 0;

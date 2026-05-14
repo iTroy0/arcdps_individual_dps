@@ -4,7 +4,10 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <string>
 #include <windows.h>
+
+#include "util.h"
 
 namespace idps {
 
@@ -18,24 +21,35 @@ namespace {
         std::fprintf(f, "[%02u:%02u:%02u.%03u] ",
                      st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     }
+
+    // Anchor the log next to the DLL (same as ini_path / default_icons_dir),
+    // not the process CWD — GW2's CWD is the game root, not the addon dir.
+    std::string log_path() {
+        char path[MAX_PATH]{};
+        HMODULE self = self_module();
+        DWORD n = GetModuleFileNameA(self, path, MAX_PATH);
+        if (n == 0 || n == MAX_PATH) return "arcdps_individual_dps.log";
+        std::string p(path, n);
+        size_t slash = p.find_last_of("\\/");
+        if (slash != std::string::npos) p.resize(slash);
+        p += "\\arcdps_individual_dps.log";
+        return p;
+    }
 }
 
 void log_init() {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_file) return;
-    fopen_s(&g_file, "arcdps_individual_dps.log", "a");
-    if (g_file) {
-        write_timestamp(g_file);
-        std::fprintf(g_file, "log_init\n");
-        std::fflush(g_file);
-    }
+    // Truncate mode: the log resets every launch, so it can never grow
+    // across sessions no matter how many error lines a session writes.
+    // log_init is idempotent (guarded above) so the truncate happens once
+    // per load. No session-start marker — log_line timestamps each entry.
+    fopen_s(&g_file, log_path().c_str(), "w");
 }
 
 void log_shutdown() {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_file) {
-        write_timestamp(g_file);
-        std::fprintf(g_file, "log_shutdown\n");
         std::fclose(g_file);
         g_file = nullptr;
     }

@@ -5,8 +5,6 @@
 #include <iterator>
 #include <windows.h>
 
-#include "log.h"
-
 namespace idps {
 
 Tracker& tracker() {
@@ -377,16 +375,6 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
 
     if (dst) {
         auto tt = classify_target(dst);
-        // Log each target once per fight so users can see whether their
-        // test golem is treated as Gadget or NPC vs the Exclude toggles.
-        if (dst->id && logged_targets_.insert(dst->id).second) {
-            log_line("target id=%llu name=%s class=%s prof=0x%08x elite=0x%08x",
-                     static_cast<unsigned long long>(dst->id),
-                     dst->name ? dst->name : "?",
-                     tt == TargetType::Gadget ? "Gadget" :
-                     tt == TargetType::Npc    ? "NPC" : "Player",
-                     dst->prof, dst->elite);
-        }
         if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
             tt == TargetType::Gadget) return;
         if (options().exclude_npcs.load(std::memory_order_relaxed) &&
@@ -486,6 +474,18 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         if (idle > 5000) {
             reset_for_new_fight(*owner);
             owner->in_combat_wall = now;
+            // Idle gap is a fight boundary for this owner. Drop their
+            // pending per-target attribution so damage from the previous
+            // skirmish can't be credited into the next one's downs. Other
+            // owners may still be mid-fight on these targets, so erase only
+            // this owner's entries, not the whole map. (current_fight_start_
+            // wall_ is left as-is — it's the global history clock, refreshed
+            // by push_to_history; in WvW a multi-skirmish history entry can
+            // therefore read long, an accepted limitation without a clean
+            // realtime fight-boundary signal.)
+            for (auto& target : target_dmg_) {
+                target.second.erase(owner->id);
+            }
         }
     }
 
@@ -517,28 +517,23 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     bool dst_is_player = dst && dst->id &&
                          dst->elite != 0xFFFFFFFFu;
     if (dst_is_player) {
-        // ev->is_offcycle differs by event kind per evtc spec:
-        //   - strike  (buff == 0): is_offcycle == 1 = damage to downed
-        //     target (cleave-on-downed signal).
-        //   - condi   (buff != 0): is_offcycle == 1 = off-cycle stack
-        //     rebuild, unrelated to downstate.
-        // Without the is_strike gate, condi off-cycle ticks on upstate
-        // foes would trip downed_now and inflate downs_contributed.
-        // CBTR_DOWNED in result is valid for both kinds.
-        bool was_down  = downed_[dst->id];
-        bool is_strike = (ev->buff == 0);
-        bool is_down   = is_strike && (ev->is_offcycle != 0);
+        // Per evtc spec (references/README_EVTC.md, CBTS_COMBAT):
+        // is_offcycle == 1 means "dst was downed at time of event" — for
+        // strike AND condi events alike. Tracking this 0->1 transition is
+        // the only realtime signal for non-squad foe downs, since
+        // CHANGEDOWN is squad-only. CBTR_DOWNED in result is the explicit
+        // downing-hit signal and is valid for both event kinds.
+        bool was_down   = downed_[dst->id];
+        bool is_down    = (ev->is_offcycle != 0);
         bool downed_now = (ev->result == CBTR_DOWNED) ||
                           (is_down && !was_down);
 
-        // Only accumulate while target is up. On rally, was_down flips
-        // back to false on the next upstate strike and counting resumes.
+        // Only accumulate while target is up. On rally, is_offcycle drops
+        // back to 0, the flag clears below, and counting resumes.
         if (!was_down) {
             target_dmg_[dst->id][owner->id] += delta;
         }
-        if (is_strike) {
-            downed_[dst->id] = is_down;
-        }
+        downed_[dst->id] = is_down;
 
         if (downed_now) {
             // Sticky the flag so cleave-on-downed events hit the was_down
@@ -638,7 +633,6 @@ void Tracker::reset_fight() {
         }
     }
     instid_to_id_.clear();
-    logged_targets_.clear();
     target_dmg_.clear();
     downed_.clear();
     any_in_combat_ = false;
@@ -682,7 +676,6 @@ void Tracker::push_to_history() {
     // path; the redundant clear there is harmless.
     target_dmg_.clear();
     downed_.clear();
-    logged_targets_.clear();
 
     if (!has_data) return;
 
