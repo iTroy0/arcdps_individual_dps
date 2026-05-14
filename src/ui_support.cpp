@@ -77,7 +77,7 @@ void draw_support_window(const char* title, bool* open,
                         float row_h  = ImGui::GetTextLineHeight();
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
                         ImGui::TablePushBackgroundChannel();
                         ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
                         ImGui::TablePopBackgroundChannel();
@@ -198,7 +198,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                         float row_h  = ImGui::GetTextLineHeight();
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
                         ImGui::TablePushBackgroundChannel();
                         ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
                         ImGui::TablePopBackgroundChannel();

@@ -347,7 +347,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         float row_h  = ImGui::GetTextLineHeight();
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
                         // Background channel clips the bar to the table rect,
                         // not the current cell.
                         ImGui::TablePushBackgroundChannel();
@@ -382,7 +382,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             ImVec2 p0 = ImGui::GetCursorScreenPos();
                             float row_h = ImGui::GetTextLineHeight();
                             ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
-                            ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x50u << 24);
+                            ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
                             ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
                         }
                     }
