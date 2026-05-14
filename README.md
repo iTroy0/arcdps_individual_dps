@@ -31,7 +31,7 @@ load and arcdps downloads + reloads the DLL whenever a newer version exists.
   tooltip, and a per-skill breakdown sorted by damage
 - Cleanses / Strips side windows
 - Down-contribution window — damage to enemy players up to the moment they go
-  down, plus the count of distinct downs you contributed to
+  down, plus the count of downs you personally landed the finishing hit on
 - Post-update banner — one-shot notice after arcdps swaps in a new build
 - Layout — responsive columns, lockable windows, screen-relative positioning,
   window opacity slider (0.10 – 1.00)
@@ -81,9 +81,12 @@ target machine.
   dropped. Otherwise `ev->value > 0` only.
 - **Down contribution** — per-target tally accumulates per attacker while
   target is up. On `CBTR_DOWNED` (or first `is_offcycle == 1` event for
-  non-squad foes), tally drains: `damage_to_downed += sum`,
-  `downs_contributed += 1` per attacker. Cleave-on-downed is excluded.
-  Player targets only (`elite != 0xFFFFFFFF`).
+  non-squad foes), the tally drains into `damage_to_downed` for every
+  attacker. The down itself (`downs_contributed`) is credited to exactly
+  one player — the attacker of the `CBTR_DOWNED` hit ("target was downed
+  by skill"). The `is_offcycle` fallback and `CBTS_CHANGEDOWN` cannot name
+  a finisher, so they credit no down. Cleave-on-downed is excluded. Player
+  targets only (`elite != 0xFFFFFFFF`).
 - **Strips / Cleanses** — counted from `CBTS_BUFFREMOVE_ALL` events
   (`is_buffremove == CBTB_ALL`), filtered by hardcoded boon / condition ID lists.
 - **combat_local** is null — arc fires identical payloads on both `combat`

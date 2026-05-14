@@ -219,19 +219,19 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             }
             break;
         case CBTS_CHANGEDOWN:
-            // Down credit normally lands via CBTR_DOWNED in on_damage —
-            // arc's realtime feed delivers CHANGEDOWN only for squad members
-            // per the evtc spec, so non-squad foes never surface here. Kept
-            // for the rare squad-self-down case where target_dmg_ has
-            // pending attribution from friendly fire.
+            // Drains any pending per-attacker damage into damage_to_downed
+            // for the rare squad-self-down case (friendly fire) where
+            // on_damage did not already drain it. Does NOT credit a down:
+            // CHANGEDOWN's src_agent is the downed agent only — the evtc
+            // feed carries no finisher identity here. downs_contributed is
+            // credited solely to the CBTR_DOWNED hit's attacker in on_damage.
             if (src && src->id) {
                 auto tit = target_dmg_.find(src->id);
                 if (tit != target_dmg_.end()) {
                     for (const auto& [aid, dmg] : tit->second) {
                         auto ait = agents_.find(aid);
                         if (ait != agents_.end()) {
-                            ait->second.damage_to_downed   += dmg;
-                            ait->second.downs_contributed  += 1;
+                            ait->second.damage_to_downed += dmg;
                         }
                     }
                     target_dmg_.erase(tit);
@@ -545,9 +545,19 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                 for (const auto& [aid, dmg] : tit->second) {
                     auto ait = agents_.find(aid);
                     if (ait != agents_.end()) {
-                        ait->second.damage_to_downed   += dmg;
-                        ait->second.downs_contributed  += 1;
+                        ait->second.damage_to_downed += dmg;
                     }
+                }
+                // The down itself is credited to exactly one player: the
+                // attacker of the CBTR_DOWNED hit ("target was downed by
+                // skill" per the evtc spec). The is_offcycle 0->1 fallback
+                // also trips downed_now, but it only means "first event seen
+                // on an already-down target" — it cannot name the finisher,
+                // so it drains damage_to_downed but credits no down. owner is
+                // the master-attributed source, guaranteed non-null +
+                // is_player by the guard at the top of on_damage.
+                if (ev->result == CBTR_DOWNED) {
+                    owner->downs_contributed += 1;
                 }
                 target_dmg_.erase(tit);
             }
