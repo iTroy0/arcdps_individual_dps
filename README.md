@@ -8,26 +8,36 @@ Each row pauses on `CBTS_EXITCOMBAT`, resumes on `CBTS_ENTERCOMBAT`.
 
 ## Download
 
-[Latest release](https://github.com/iTroy0/arcdps_individual_dps/releases/latest)
+[![Download latest release](https://img.shields.io/badge/Download-latest%20release-2ea44f?style=for-the-badge)](https://github.com/iTroy0/arcdps_individual_dps/releases/latest)
 
-Auto-updates via arcdps's `get_update_url`: plugin queries GitHub Releases on
-load, returns a URL when a newer tag exists, arcdps downloads + reloads the DLL.
+New to GitHub? Click the green button above, then download
+`arcdps_individual_dps.dll` from the **Assets** list on the release page.
+
+After the first install it updates itself: the plugin checks GitHub Releases on
+load and arcdps downloads + reloads the DLL whenever a newer version exists.
 
 ## Features
 
-- Per-player damage / DPS table, EMA-smoothed live DPS column
-- Active-damage-window denominator (matches arcdps `Damage (excl)`)
-- Per-self fight boundaries — squadmates don't reset your row
-- Profession icons + colored names
-- Click row → detail window: DPS-over-time graph with crosshair tooltip,
-  per-skill breakdown sorted by damage
+- Per-player damage / DPS table — EMA-smoothed live DPS column, active-damage-
+  window denominator (matches arcdps `Damage (excl)`), click headers to sort
+- Per-self fight boundaries — squadmates entering / leaving combat don't reset
+  your row
+- Fight history — the last 5 fights are kept; right-click a player row to step
+  back through them
+- Colored per-player damage bars, profession icons, optional gold self-name and
+  pin-self-to-top
+- Click a row → detail window: DPS-over-time graph with smoothed / cumulative /
+  average / burst overlay layers (toggle each from the legend), crosshair
+  tooltip, and a per-skill breakdown sorted by damage
 - Cleanses / Strips side windows
-- Down-contribution window: damage to enemy players up to the moment they go
-  down, plus count of distinct downs you contributed to
-- Right-click context menu + arcdps options panel
-- Window opacity slider (0.10 – 1.00)
+- Down-contribution window — damage to enemy players up to the moment they go
+  down, plus the count of distinct downs you contributed to
+- Post-update banner — one-shot notice after arcdps swaps in a new build
+- Layout — responsive columns, lockable windows, screen-relative positioning,
+  window opacity slider (0.10 – 1.00)
 - NPC / Gadget exclusion filters
-- Settings persisted to `arcdps_individual_dps.ini`
+- Right-click menu + arcdps options-panel tab; settings persist to
+  `arcdps_individual_dps.ini`
 
 ## Install
 
