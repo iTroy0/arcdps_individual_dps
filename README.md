@@ -80,13 +80,14 @@ target machine.
 - **Damage filter** — strikes with `BLOCK/EVADE/INTERRUPT/ABSORB/BLIND` are
   dropped. Otherwise `ev->value > 0` only.
 - **Down contribution** — per-target tally accumulates per attacker while
-  target is up. On `CBTR_DOWNED` (or first `is_offcycle == 1` event for
-  non-squad foes), the tally drains into `damage_to_downed` for every
-  attacker. The down itself (`downs_contributed`) is credited to exactly
-  one player — the attacker of the `CBTR_DOWNED` hit ("target was downed
-  by skill"). The `is_offcycle` fallback and `CBTS_CHANGEDOWN` cannot name
-  a finisher, so they credit no down. Cleave-on-downed is excluded. Player
-  targets only (`elite != 0xFFFFFFFF`).
+  target is up. On `CBTR_DOWNED` (or first `is_offcycle == 1` event), the
+  tally drains into `damage_to_downed` for every attacker, and the down
+  itself (`downs_contributed`) is credited to exactly one player — the
+  owner of the event that flipped the target into downstate (the finisher
+  for `CBTR_DOWNED`; for the offcycle fallback, almost always the downing
+  strike/tick's owner). `CBTS_CHANGEDOWN` carries no attacker identity and
+  credits no down. Cleave-on-downed is excluded. Player targets only
+  (`elite != 0xFFFFFFFF`).
 - **Strips / Cleanses** — counted from `CBTS_BUFFREMOVE_ALL` events
   (`is_buffremove == CBTB_ALL`), filtered by hardcoded boon / condition ID lists.
 - **combat_local** is null — arc fires identical payloads on both `combat`

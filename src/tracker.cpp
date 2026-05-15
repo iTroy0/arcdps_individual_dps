@@ -549,16 +549,17 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                     }
                 }
                 // The down itself is credited to exactly one player: the
-                // attacker of the CBTR_DOWNED hit ("target was downed by
-                // skill" per the evtc spec). The is_offcycle 0->1 fallback
-                // also trips downed_now, but it only means "first event seen
-                // on an already-down target" — it cannot name the finisher,
-                // so it drains damage_to_downed but credits no down. owner is
-                // the master-attributed source, guaranteed non-null +
-                // is_player by the guard at the top of on_damage.
-                if (ev->result == CBTR_DOWNED) {
-                    owner->downs_contributed += 1;
-                }
+                // owner of the event that flipped the target into downstate.
+                // For CBTR_DOWNED that is the finisher by definition. For
+                // the is_offcycle 0->1 fallback (the only signal for many
+                // condi downs and any down where arc does not emit
+                // CBTR_DOWNED), owner is the attacker on the first event
+                // that observed the target downed — almost always the
+                // downing strike/tick itself, occasionally a cleaver if the
+                // true downing event was filtered. owner is the master-
+                // attributed source, guaranteed non-null + is_player by the
+                // guard at the top of on_damage.
+                owner->downs_contributed += 1;
                 target_dmg_.erase(tit);
             }
         } else if (ev->result == CBTR_KILLINGBLOW) {
