@@ -401,18 +401,35 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     // Hover tooltip: top-3 skills for this agent in the
                     // currently-viewed fight (live or past). top_skills*
                     // skips the DamagePoint history copy so per-frame cost
-                    // stays trivial while hovering.
+                    // stays trivial while hovering. Cached for 250 ms so a
+                    // resting cursor doesn't re-lock the combat-thread
+                    // mutex every render frame.
                     if (ImGui::IsItemHovered() && r.damage_total > 0) {
-                        static std::vector<SkillDetail> tip;
-                        bool ok = viewing_history
-                            ? tracker().top_skills_at(hist_n - viewed_fight,
-                                                      r.id, 3, tip)
-                            : tracker().top_skills(r.id, 3, tip);
-                        if (ok && !tip.empty()) {
+                        struct TipCache {
+                            uintptr_t agent   = 0;
+                            int       fight   = -1;
+                            uint64_t  last_ms = 0;
+                            bool      ok      = false;
+                            std::vector<SkillDetail> data;
+                        };
+                        static TipCache tip_cache;
+                        uint64_t now_ms = GetTickCount64();
+                        if (tip_cache.agent != r.id ||
+                            tip_cache.fight != viewed_fight ||
+                            now_ms - tip_cache.last_ms > 250) {
+                            tip_cache.ok = viewing_history
+                                ? tracker().top_skills_at(hist_n - viewed_fight,
+                                                          r.id, 3, tip_cache.data)
+                                : tracker().top_skills(r.id, 3, tip_cache.data);
+                            tip_cache.agent   = r.id;
+                            tip_cache.fight   = viewed_fight;
+                            tip_cache.last_ms = now_ms;
+                        }
+                        if (tip_cache.ok && !tip_cache.data.empty()) {
                             ImGui::BeginTooltip();
                             ImGui::Text("Top skills - %s", r.name.c_str());
                             ImGui::Separator();
-                            for (const auto& sd : tip) {
+                            for (const auto& sd : tip_cache.data) {
                                 char dmgbuf[16];
                                 format_count(dmgbuf, sizeof(dmgbuf), sd.damage);
                                 const char* nm = sd.name.empty() ? "(unknown)"

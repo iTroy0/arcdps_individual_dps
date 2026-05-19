@@ -173,6 +173,13 @@ private:
     // subsequent damage event on them carries is_offcycle == 1 per the evtc
     // spec. Realtime-safe for non-squad targets where CHANGEDOWN never fires.
     std::unordered_map<uintptr_t, bool>             downed_;
+    // Most recent pre-down attacker per target. Per evtc spec is_offcycle
+    // reports state at the START of the event, so the "discovery" event
+    // that flips is_offcycle 0->1 fires AFTER the down — its owner is a
+    // post-down cleaver, not the finisher. We credit the actual finisher
+    // by recording every pre-down hit's attacker here and using that on
+    // the discovery branch. Cleared anywhere target_dmg_ / downed_ are.
+    std::unordered_map<uintptr_t, uintptr_t>        last_attacker_;
     bool                                            any_in_combat_   = false;
     bool                                            in_encounter_    = false;
 

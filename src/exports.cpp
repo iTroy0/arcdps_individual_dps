@@ -22,7 +22,7 @@ namespace {
     // Single source of truth for the version string. Bump this one line
     // per release. kVersion is read at runtime (idps::version(), the
     // get_update_url semver compare); kBuild is arc's out_build display.
-    #define IDPS_VERSION "0.7.5"
+    #define IDPS_VERSION "0.7.6"
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = IDPS_VERSION;
     constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";
@@ -38,8 +38,12 @@ namespace {
     // ESC is grabbed at arc's keybind layer before reaching ImGui, so
     // closing the detail window has to happen here.
     uintptr_t mod_wnd_nofilter(HWND /*hwnd*/, UINT msg,
-                               WPARAM wparam, LPARAM /*lparam*/) {
-        if (msg == WM_KEYDOWN && wparam == VK_ESCAPE) {
+                               WPARAM wparam, LPARAM lparam) {
+        // Bit 30 of lparam is the previous-key-state flag: set when the
+        // key was already down. Skip auto-repeats so a held ESC doesn't
+        // toggle the detail-close request 30+ times a second.
+        if (msg == WM_KEYDOWN && wparam == VK_ESCAPE &&
+            !(lparam & 0x40000000)) {
             if (consume_esc_for_detail()) return 0;
         }
         return msg;

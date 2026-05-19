@@ -5,6 +5,8 @@
 #include <iterator>
 #include <windows.h>
 
+#include "log.h"
+
 namespace idps {
 
 Tracker& tracker() {
@@ -106,7 +108,8 @@ namespace {
 
     bool has_fight_state(const AgentState& s) {
         return s.accumulated_ms > 0 || s.damage_total > 0 ||
-               s.strip_count > 0 || s.cleanse_count > 0;
+               s.strip_count > 0 || s.cleanse_count > 0 ||
+               s.damage_to_downed > 0 || s.downs_contributed > 0;
     }
 
     void reset_for_new_fight(AgentState& s) {
@@ -147,8 +150,18 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                 s.present   = true;
                 s.last_seen_wall = wall_now();
                 if (dst && dst->id) {
-                    s.instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
-                    instid_to_id_[s.instid] = src->id;
+                    uint16_t new_instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
+                    auto existing = instid_to_id_.find(new_instid);
+                    if (existing != instid_to_id_.end() &&
+                        existing->second != src->id) {
+                        log_line("tracker: instid %u rebinding from agent "
+                                 "%llx to %llx",
+                                 static_cast<unsigned>(new_instid),
+                                 static_cast<unsigned long long>(existing->second),
+                                 static_cast<unsigned long long>(src->id));
+                    }
+                    s.instid = new_instid;
+                    instid_to_id_[new_instid] = src->id;
                 }
             } else if (src->prof == 0) {
                 // Tracking-remove. Keep accumulated stats until fight reset
@@ -216,6 +229,7 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 // reset_fight() never runs.
                 target_dmg_.erase(src->id);
                 downed_.erase(src->id);
+                last_attacker_.erase(src->id);
             }
             break;
         case CBTS_CHANGEDOWN:
@@ -507,8 +521,8 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     // (ev->result == CBTR_DOWNED) into damage_to_downed. arc's realtime
     // feed delivers CHANGEDOWN/CHANGEDEAD only for squad members per the
     // evtc spec, so enemy-player downs in WvW never surface as state-
-    // changes — the result-code path is the only realtime signal for
-    // non-squad targets.
+    // changes — the result-code / is_offcycle paths below are the only
+    // realtime signals for non-squad targets.
     //
     // Player-vs-player only. NPCs (pets, minions, clones, jade mech)
     // classify with elite == 0xFFFFFFFFu and some go through real
@@ -518,28 +532,41 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                          dst->elite != 0xFFFFFFFFu;
     if (dst_is_player) {
         // Per evtc spec (references/README_EVTC.md, CBTS_COMBAT):
-        // is_offcycle == 1 means "dst was downed at time of event" — for
-        // strike AND condi events alike. Tracking this 0->1 transition is
-        // the only realtime signal for non-squad foe downs, since
-        // CHANGEDOWN is squad-only. CBTR_DOWNED in result is the explicit
-        // downing-hit signal and is valid for both event kinds.
-        bool was_down   = downed_[dst->id];
-        bool is_down    = (ev->is_offcycle != 0);
-        bool downed_now = (ev->result == CBTR_DOWNED) ||
-                          (is_down && !was_down);
+        // is_offcycle == 1 means "dst was downed at the START of the
+        // event" — so a regular damage event whose owner just downed the
+        // target reports is_offcycle == 0 (target was still up). The
+        // FIRST event observing is_offcycle == 1 is therefore a post-down
+        // event whose owner is a cleaver, not the finisher. Crediting
+        // them is wrong; track the most recent pre-down attacker and
+        // credit that one instead.
+        bool was_down = downed_[dst->id];
+        bool is_down  = (ev->is_offcycle != 0);
 
-        // Only accumulate while target is up. On rally, is_offcycle drops
-        // back to 0, the flag clears below, and counting resumes.
-        if (!was_down) {
+        // Only accumulate while target is up (pre-down hits). The
+        // discovery event (is_down=1, was_down=0) and cleave-on-downed
+        // events are post-down and don't count toward contribution.
+        if (!is_down && !was_down) {
             target_dmg_[dst->id][owner->id] += delta;
+            last_attacker_[dst->id]         = owner->id;
         }
-        downed_[dst->id] = is_down;
 
-        if (downed_now) {
-            // Sticky the flag so cleave-on-downed events hit the was_down
-            // guard. Needed when arc fires CBTR_DOWNED with is_offcycle=0
-            // — the assignment above would leave the flag clear after drain.
-            downed_[dst->id] = true;
+        // Two paths flip the target into downstate for our purposes:
+        //   explicit_down  — arc tagged result=CBTR_DOWNED (this event's
+        //                    owner is the finisher by definition; valid
+        //                    for both strike and condi).
+        //   discovery_down — is_offcycle 0->1 transition with no
+        //                    CBTR_DOWNED (the only realtime signal for
+        //                    most non-squad foe downs in WvW). Credit
+        //                    last_attacker_ — the actual downer — rather
+        //                    than the discovery event's post-down owner.
+        bool explicit_down  = (ev->result == CBTR_DOWNED) && !was_down;
+        bool discovery_down = is_down && !was_down && !explicit_down;
+        if (explicit_down || discovery_down) {
+            uintptr_t finisher_id = owner->id;
+            if (discovery_down) {
+                auto la = last_attacker_.find(dst->id);
+                if (la != last_attacker_.end()) finisher_id = la->second;
+            }
             auto tit = target_dmg_.find(dst->id);
             if (tit != target_dmg_.end()) {
                 for (const auto& [aid, dmg] : tit->second) {
@@ -548,23 +575,28 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                         ait->second.damage_to_downed += dmg;
                     }
                 }
-                // The down itself is credited to exactly one player: the
-                // owner of the event that flipped the target into downstate.
-                // For CBTR_DOWNED that is the finisher by definition. For
-                // the is_offcycle 0->1 fallback (the only signal for many
-                // condi downs and any down where arc does not emit
-                // CBTR_DOWNED), owner is the attacker on the first event
-                // that observed the target downed — almost always the
-                // downing strike/tick itself, occasionally a cleaver if the
-                // true downing event was filtered. owner is the master-
-                // attributed source, guaranteed non-null + is_player by the
-                // guard at the top of on_damage.
-                owner->downs_contributed += 1;
                 target_dmg_.erase(tit);
             }
-        } else if (ev->result == CBTR_KILLINGBLOW) {
+            auto fit = agents_.find(finisher_id);
+            if (fit != agents_.end()) {
+                fit->second.downs_contributed += 1;
+            }
+            // Sticky the down flag so subsequent cleave-on-downed events
+            // hit the was_down guard. Needed when arc fires CBTR_DOWNED
+            // with is_offcycle=0 — the next-event view would otherwise
+            // see was_down=0 and re-trigger the discovery branch.
+            downed_[dst->id] = true;
+            last_attacker_.erase(dst->id);
+        } else {
+            // Normal hit, cleave-on-downed, or rally. is_down already
+            // reflects the post-event state per spec.
+            downed_[dst->id] = is_down;
+        }
+
+        if (ev->result == CBTR_KILLINGBLOW) {
             target_dmg_.erase(dst->id);
             downed_.erase(dst->id);
+            last_attacker_.erase(dst->id);
         }
     }
 
@@ -646,6 +678,7 @@ void Tracker::reset_fight() {
     instid_to_id_.clear();
     target_dmg_.clear();
     downed_.clear();
+    last_attacker_.clear();
     any_in_combat_ = false;
 }
 
@@ -687,6 +720,7 @@ void Tracker::push_to_history() {
     // path; the redundant clear there is harmless.
     target_dmg_.clear();
     downed_.clear();
+    last_attacker_.clear();
 
     if (!has_data) return;
 

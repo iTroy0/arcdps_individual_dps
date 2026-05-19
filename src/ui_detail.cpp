@@ -117,7 +117,10 @@ void draw_detail_window(int viewed_history_idx) {
         // bursts and inflate peaks vs arc's panel — a 1s window matches
         // arc's peak more closely. Manual plot (instead of PlotLines) so
         // the hover tooltip can format values with a "k" suffix.
-        std::vector<float> samples;
+        // Static buffer reused across frames — avoids reallocating a
+        // ~4096-element float vector every render of the detail window.
+        static std::vector<float> samples;
+        samples.clear();
         samples.reserve(d.history.size());
         float peak_dps = 0.0f;
         for (size_t i = 1; i < d.history.size(); ++i) {
@@ -141,7 +144,8 @@ void draw_detail_window(int viewed_history_idx) {
         // EMA-smoothed companion samples for the bell-shape visual line.
         // Raw `samples` still drives peak_dps so the label reflects real 1s
         // damage, not the lagged smoothed value.
-        std::vector<float> ema_samples;
+        static std::vector<float> ema_samples;
+        ema_samples.clear();
         ema_samples.reserve(samples.size());
         {
             constexpr float kEmaAlpha = 0.30f;
@@ -172,7 +176,8 @@ void draw_detail_window(int viewed_history_idx) {
         // — only the pivot matters, full sort is wasted work.
         float burst_threshold = 0.0f;
         if (samples.size() >= 4) {
-            std::vector<float> tmp = samples;
+            static std::vector<float> tmp;
+            tmp.assign(samples.begin(), samples.end());
             size_t pivot = tmp.size() * 3 / 4;
             std::nth_element(tmp.begin(), tmp.begin() + pivot, tmp.end());
             burst_threshold = tmp[pivot];
@@ -208,6 +213,7 @@ void draw_detail_window(int viewed_history_idx) {
             fmt(abuf, sizeof(abuf), avg_dps);
             // chip(col, toggle_or_null, "fmt", args...). null toggle = no
             // click handling, no dim state.
+            int chip_idx = 0;
             auto chip = [&](ImU32 col, bool* toggle, const char* fmt_str,
                             auto&&... args) {
                 char buf[64];
@@ -223,7 +229,11 @@ void draw_detail_window(int viewed_history_idx) {
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 bool hovered = false;
                 if (toggle) {
-                    ImGui::PushID(buf);
+                    // Stable numeric ID per chip slot — using the formatted
+                    // text would collide when two chips compute the same
+                    // string (e.g. peak == avg) and would also break
+                    // hover/click state every frame as the value changes.
+                    ImGui::PushID(chip_idx);
                     if (ImGui::InvisibleButton("##chip",
                                                ImVec2(chip_w, h))) {
                         *toggle = !*toggle;
@@ -233,6 +243,7 @@ void draw_detail_window(int viewed_history_idx) {
                 } else {
                     ImGui::Dummy(ImVec2(chip_w, h));
                 }
+                ++chip_idx;
 
                 auto* dl = ImGui::GetWindowDrawList();
                 if (hovered) {
@@ -402,24 +413,33 @@ void draw_detail_window(int viewed_history_idx) {
 
             // Cumulative damage curve — back layer, green. Scaled to its
             // own peak (total damage in the rendered span), independent
-            // of the DPS Y-axis. Sample index k = history index - 1, so
-            // x mapping matches the DPS line.
+            // of the DPS Y-axis. Plotted against wall-time so the curve
+            // ramps from 0 at history[0] up to total_dmg at history.back(),
+            // covering the initial rise that an index-based mapping would
+            // skip when sample 0 starts mid-fight.
             if (s.chart_cum && d.history.size() >= 2 && total_dmg > 0) {
                 const ImU32 cum_col = IM_COL32(90, 220, 140, 160);
-                uint64_t base = d.history.front().damage_total;
-                size_t hn = d.history.size();
-                for (size_t i = 1; i + 1 < hn; ++i) {
-                    float t0 = static_cast<float>(i - 1) / static_cast<float>(n - 1);
-                    float t1 = static_cast<float>(i)     / static_cast<float>(n - 1);
-                    float v0 = static_cast<float>(d.history[i].damage_total - base) /
-                               static_cast<float>(total_dmg);
-                    float v1 = static_cast<float>(d.history[i + 1].damage_total - base) /
-                               static_cast<float>(total_dmg);
-                    float y0 = graph_p1.y - v0 * graph_h;
-                    float y1 = graph_p1.y - v1 * graph_h;
-                    dl->AddLine({graph_p0.x + t0 * graph_w, y0},
-                                {graph_p0.x + t1 * graph_w, y1},
-                                cum_col, 1.0f);
+                uint64_t base    = d.history.front().damage_total;
+                uint64_t t_start = d.history.front().wall_ms;
+                uint64_t span_ms = d.history.back().wall_ms > t_start
+                                 ? d.history.back().wall_ms - t_start : 0;
+                if (span_ms > 0) {
+                    size_t hn = d.history.size();
+                    for (size_t i = 1; i < hn; ++i) {
+                        float t0 = static_cast<float>(d.history[i - 1].wall_ms - t_start) /
+                                   static_cast<float>(span_ms);
+                        float t1 = static_cast<float>(d.history[i    ].wall_ms - t_start) /
+                                   static_cast<float>(span_ms);
+                        float v0 = static_cast<float>(d.history[i - 1].damage_total - base) /
+                                   static_cast<float>(total_dmg);
+                        float v1 = static_cast<float>(d.history[i    ].damage_total - base) /
+                                   static_cast<float>(total_dmg);
+                        float y0 = graph_p1.y - v0 * graph_h;
+                        float y1 = graph_p1.y - v1 * graph_h;
+                        dl->AddLine({graph_p0.x + t0 * graph_w, y0},
+                                    {graph_p0.x + t1 * graph_w, y1},
+                                    cum_col, 1.0f);
+                    }
                 }
             }
 
@@ -519,7 +539,14 @@ void draw_detail_window(int viewed_history_idx) {
             }
         } else {
             ImGui::Dummy(ImVec2(total_w, graph_h));
-            ImGui::TextDisabled("(not enough data yet)");
+            // Distinguish "no data" from "window too narrow to plot" so the
+            // user knows whether to widen the detail window or wait for
+            // damage events.
+            const char* reason =
+                (samples.empty() || peak_dps <= 0.0f)
+                    ? "(not enough data yet)"
+                    : "(window too narrow)";
+            ImGui::TextDisabled("%s", reason);
         }
 
         ImGui::Separator();

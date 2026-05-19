@@ -34,8 +34,11 @@ int compare_semver(const char* a, const char* b) {
         bool a_suffix = *a && (*a < '0' || *a > '9') && *a != '.';
         bool b_suffix = *b && (*b < '0' || *b > '9') && *b != '.';
         if (a_suffix || b_suffix) {
-            if (a_suffix && b_suffix) return 0; // both pre-release, treat equal
-            return a_suffix ? -1 : 1;           // suffixed side is lower
+            // Both pre-release: compare suffixes alphanumerically per
+            // semver ("1.0.0-rc1" < "1.0.0-rc2"). Suffix-only side ranks
+            // below the unsuffixed (final-release) side.
+            if (a_suffix && b_suffix) return std::strcmp(a, b);
+            return a_suffix ? -1 : 1;
         }
     }
     return 0;
