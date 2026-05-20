@@ -86,8 +86,13 @@ void draw_detail_window(int viewed_history_idx) {
         return;
     }
 
-    char title[128];
-    std::snprintf(title, sizeof(title), "%s - details###idps_detail", d.name.c_str());
+    char title[160];
+    if (!d.account.empty())
+        std::snprintf(title, sizeof(title), "%s (%s) - details###idps_detail",
+                      d.name.c_str(), d.account.c_str());
+    else
+        std::snprintf(title, sizeof(title), "%s - details###idps_detail",
+                      d.name.c_str());
 
     static bool   prev_rel = false;
     static ImVec2 prev_ds(0.0f, 0.0f);
@@ -530,6 +535,7 @@ void draw_detail_window(int viewed_history_idx) {
                 char cbuf[16];
                 format_count(cbuf, sizeof(cbuf), cumulative);
 
+                anchor_cursor_tooltip();
                 ImGui::BeginTooltip();
                 ImGui::Text("t = %s", tbuf);
                 if (v >= 1000.0f) ImGui::Text("DPS:    %.1fk", v / 1000.0f);

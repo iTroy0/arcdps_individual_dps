@@ -35,6 +35,10 @@ struct DamagePoint {
 struct AgentState {
     uintptr_t             id              = 0;
     std::string           name;
+    // GW2 account ("Account.1234"), captured from dst->name on tracking-add
+    // (arc prefixes ':'; stored without it). Empty until a tracking-add
+    // carrying it arrives. Identity — not cleared on fight reset.
+    std::string           account;
     uint32_t              prof            = 0;
     uint32_t              elite           = 0;
     uint16_t              instid          = 0;
@@ -83,6 +87,7 @@ struct SkillDetail {
 
 struct AgentDetail {
     std::string              name;
+    std::string              account;
     uint32_t                 prof;
     uint32_t                 elite;
     std::vector<DamagePoint> history;
@@ -105,6 +110,7 @@ struct FightSnapshot {
 struct Snapshot {
     uintptr_t   id;
     std::string name;
+    std::string account;
     uint32_t    prof;
     uint32_t    elite;
     uint64_t    combat_ms;

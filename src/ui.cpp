@@ -233,7 +233,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     64.0f);
-            ImGui::TableSetupColumn("Combat",
+            ImGui::TableSetupColumn("Time",
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     48.0f);
@@ -404,7 +404,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     // stays trivial while hovering. Cached for 250 ms so a
                     // resting cursor doesn't re-lock the combat-thread
                     // mutex every render frame.
-                    if (ImGui::IsItemHovered() && r.damage_total > 0) {
+                    if (ImGui::IsItemHovered()) {
                         struct TipCache {
                             uintptr_t agent   = 0;
                             int       fight   = -1;
@@ -413,29 +413,45 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             std::vector<SkillDetail> data;
                         };
                         static TipCache tip_cache;
-                        uint64_t now_ms = GetTickCount64();
-                        if (tip_cache.agent != r.id ||
-                            tip_cache.fight != viewed_fight ||
-                            now_ms - tip_cache.last_ms > 250) {
-                            tip_cache.ok = viewing_history
-                                ? tracker().top_skills_at(hist_n - viewed_fight,
-                                                          r.id, 3, tip_cache.data)
-                                : tracker().top_skills(r.id, 3, tip_cache.data);
-                            tip_cache.agent   = r.id;
-                            tip_cache.fight   = viewed_fight;
-                            tip_cache.last_ms = now_ms;
+                        // Skills only meaningful for rows with damage; account
+                        // ID shows on every player row regardless.
+                        if (r.damage_total > 0) {
+                            uint64_t now_ms = GetTickCount64();
+                            if (tip_cache.agent != r.id ||
+                                tip_cache.fight != viewed_fight ||
+                                now_ms - tip_cache.last_ms > 250) {
+                                tip_cache.ok = viewing_history
+                                    ? tracker().top_skills_at(hist_n - viewed_fight,
+                                                              r.id, 3, tip_cache.data)
+                                    : tracker().top_skills(r.id, 3, tip_cache.data);
+                                tip_cache.agent   = r.id;
+                                tip_cache.fight   = viewed_fight;
+                                tip_cache.last_ms = now_ms;
+                            }
+                        } else {
+                            tip_cache.ok = false;
                         }
-                        if (tip_cache.ok && !tip_cache.data.empty()) {
+                        bool has_skills = tip_cache.ok &&
+                                          tip_cache.agent == r.id &&
+                                          !tip_cache.data.empty();
+                        if (!r.account.empty() || has_skills) {
+                            anchor_cursor_tooltip();
                             ImGui::BeginTooltip();
-                            ImGui::Text("Top skills - %s", r.name.c_str());
-                            ImGui::Separator();
-                            for (const auto& sd : tip_cache.data) {
-                                char dmgbuf[16];
-                                format_count(dmgbuf, sizeof(dmgbuf), sd.damage);
-                                const char* nm = sd.name.empty() ? "(unknown)"
-                                                                  : sd.name.c_str();
-                                ImGui::Text("%s : %s  (%u hits)",
-                                            nm, dmgbuf, sd.hits);
+                            if (!r.account.empty())
+                                ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.50f, 1.0f),
+                                                   "%s", r.account.c_str());
+                            if (has_skills) {
+                                if (!r.account.empty()) ImGui::Separator();
+                                ImGui::Text("Top skills - %s", r.name.c_str());
+                                ImGui::Separator();
+                                for (const auto& sd : tip_cache.data) {
+                                    char dmgbuf[16];
+                                    format_count(dmgbuf, sizeof(dmgbuf), sd.damage);
+                                    const char* nm = sd.name.empty() ? "(unknown)"
+                                                                      : sd.name.c_str();
+                                    ImGui::Text("%s : %s  (%u hits)",
+                                                nm, dmgbuf, sd.hits);
+                                }
                             }
                             ImGui::EndTooltip();
                         }

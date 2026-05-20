@@ -39,7 +39,9 @@ void draw_support_window(const char* title, bool* open,
         if (ImGui::BeginTable("tbl", 3, sup_flags)) {
             ImGui::TableSetupColumn("Prof",  ImGuiTableColumnFlags_WidthFixed, 22.0f);
             ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 56.0f);
+            // Count column is labeled per-window via the title arg so the
+            // Cleanses window reads "Cleanses" and Strips reads "Strips".
+            ImGui::TableSetupColumn(title, ImGuiTableColumnFlags_WidthFixed, 64.0f);
             ImGui::TableHeadersRow();
 
             g_sort_idx.resize(rows.size());
@@ -102,6 +104,7 @@ void draw_support_window(const char* title, bool* open,
                 ImGui::PushStyleColor(ImGuiCol_Text, col);
                 ImGui::TextUnformatted(r.name.c_str());
                 ImGui::PopStyleColor();
+                account_tooltip(r.account);
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", count);
             }
@@ -222,6 +225,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                 ImGui::PushStyleColor(ImGuiCol_Text, col);
                 ImGui::TextUnformatted(r.name.c_str());
                 ImGui::PopStyleColor();
+                account_tooltip(r.account);
                 ImGui::TableNextColumn();
                 char buf[16];
                 format_count(buf, sizeof(buf), r.damage_to_downed);

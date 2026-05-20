@@ -110,6 +110,25 @@ void item_tooltip(const char* text) {
     }
 }
 
+void anchor_cursor_tooltip() {
+    ImVec2 mp = ImGui::GetIO().MousePos;
+    // Pivot (1,1): the tooltip's bottom-right corner anchors at the cursor,
+    // so it grows up and to the LEFT, never under the pointer. Opaque bg so
+    // it isn't washed out by the translucent popup over the game world.
+    ImGui::SetNextWindowPos(ImVec2(mp.x, mp.y - 6.0f),
+                            ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.95f);
+}
+
+void account_tooltip(const std::string& account) {
+    if (account.empty()) return;
+    if (!ImGui::IsItemHovered()) return;
+    anchor_cursor_tooltip();
+    ImGui::BeginTooltip();
+    ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.50f, 1.0f), "%s", account.c_str());
+    ImGui::EndTooltip();
+}
+
 void align_icon_to_text() {
     float dy = (ImGui::GetTextLineHeight() - 14.0f) * 0.5f;
     if (dy > 0.0f) {

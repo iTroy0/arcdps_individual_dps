@@ -26,6 +26,14 @@ void pin_self_to_top(std::vector<size_t>& idx,
 
 void item_tooltip(const char* text);
 
+// Position the next tooltip up-and-left of the cursor with an opaque bg.
+// Call immediately before BeginTooltip.
+void anchor_cursor_tooltip();
+
+// Hover tooltip showing a player's account name. No-op when account is
+// empty. Attach immediately after rendering the row's name item.
+void account_tooltip(const std::string& account);
+
 void align_icon_to_text();
 
 void apply_window_pos  (float abs_x, float abs_y, float rx, float ry, bool relative,

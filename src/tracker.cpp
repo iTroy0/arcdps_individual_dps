@@ -149,6 +149,13 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                 s.is_player = true;
                 s.present   = true;
                 s.last_seen_wall = wall_now();
+                // Account name ("Account.1234") arrives in dst->name on a
+                // player tracking-add, arc-prefixed with ':'. Strip it. Only
+                // assign when present so a later add lacking it (some self /
+                // lazy-register paths pass the target in dst) can't wipe a
+                // known account.
+                if (dst && dst->name && dst->name[0] == ':' && dst->name[1])
+                    s.account = dst->name + 1;
                 if (dst && dst->id) {
                     uint16_t new_instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
                     auto existing = instid_to_id_.find(new_instid);
@@ -159,6 +166,18 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                                  static_cast<unsigned>(new_instid),
                                  static_cast<unsigned long long>(existing->second),
                                  static_cast<unsigned long long>(src->id));
+                        // Clear the prior owner's instid field. Without this,
+                        // that agent's later tracking-remove erases the map
+                        // via its stale instid (== new_instid) and drops THIS
+                        // agent's fresh mapping; the find_by_instid linear
+                        // fallback could likewise still match the old binding.
+                        // find() does not insert, so the `s` reference above
+                        // stays valid.
+                        auto prev = agents_.find(existing->second);
+                        if (prev != agents_.end() &&
+                            prev->second.instid == new_instid) {
+                            prev->second.instid = 0;
+                        }
                     }
                     s.instid = new_instid;
                     instid_to_id_[new_instid] = src->id;
@@ -297,6 +316,12 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 if (s.is_self) continue;
                 s.present = false;
                 s.in_combat_wall.reset();
+                // Clear instid alongside the instid_to_id_ wipe below so the
+                // find_by_instid linear fallback can't attribute next-map
+                // damage to a now-absent prior-map squadmate once instids
+                // recycle. Self keeps its instid (re-seeded lazily on its
+                // next damage event).
+                s.instid = 0;
             }
             instid_to_id_.clear();
             any_in_combat_ = false;
@@ -562,10 +587,19 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         bool explicit_down  = (ev->result == CBTR_DOWNED) && !was_down;
         bool discovery_down = is_down && !was_down && !explicit_down;
         if (explicit_down || discovery_down) {
-            uintptr_t finisher_id = owner->id;
+            // discovery_down credits the last pre-down attacker, not the
+            // discovery event's owner (a post-down cleaver). If we never
+            // observed a pre-down hit — target entered our view already
+            // downed — last_attacker_ is empty and there is no one to
+            // credit. target_dmg_ and last_attacker_ populate together, so
+            // the drain below is a no-op in that case; skip the down credit
+            // rather than defaulting to owner->id and blaming the cleaver.
+            bool      have_finisher = true;
+            uintptr_t finisher_id   = owner->id;
             if (discovery_down) {
                 auto la = last_attacker_.find(dst->id);
                 if (la != last_attacker_.end()) finisher_id = la->second;
+                else                            have_finisher = false;
             }
             auto tit = target_dmg_.find(dst->id);
             if (tit != target_dmg_.end()) {
@@ -577,9 +611,11 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
                 }
                 target_dmg_.erase(tit);
             }
-            auto fit = agents_.find(finisher_id);
-            if (fit != agents_.end()) {
-                fit->second.downs_contributed += 1;
+            if (have_finisher) {
+                auto fit = agents_.find(finisher_id);
+                if (fit != agents_.end()) {
+                    fit->second.downs_contributed += 1;
+                }
             }
             // Sticky the down flag so subsequent cleave-on-downed events
             // hit the was_down guard. Needed when arc fires CBTR_DOWNED
@@ -750,7 +786,7 @@ bool Tracker::snapshot_at(int idx, std::vector<Snapshot>& out) const {
         uint64_t denom = ms < 500 ? 500 : ms;
         uint64_t dps   = s.damage_total * 1000ull / denom;
         out.push_back(Snapshot{
-            s.id, s.name, s.prof, s.elite,
+            s.id, s.name, s.account, s.prof, s.elite,
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
             s.damage_to_downed, s.downs_contributed,
@@ -785,7 +821,7 @@ bool Tracker::agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) cons
     uint64_t denom = ms < 500 ? 500 : ms;
     uint64_t dps   = s.damage_total * 1000ull / denom;
     out = Snapshot{
-        s.id, s.name, s.prof, s.elite,
+        s.id, s.name, s.account, s.prof, s.elite,
         ms, s.damage_total, dps,
         s.strip_count, s.cleanse_count,
         s.damage_to_downed, s.downs_contributed,
@@ -857,6 +893,7 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
     }
     const auto& s = it->second;
     out.name  = s.name;
+    out.account = s.account;
     out.prof  = s.prof;
     out.elite = s.elite;
     out.history.assign(s.history.begin(), s.history.end());
@@ -895,6 +932,7 @@ void Tracker::detail(uintptr_t id, AgentDetail& out) const {
         if (it == agents_.end()) return;
         const auto& s = it->second;
         out.name  = s.name;
+        out.account = s.account;
         out.prof  = s.prof;
         out.elite = s.elite;
         out.history_start_wall = s.first_damage_wall;
@@ -954,7 +992,7 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
         uint64_t denom = ms < 500 ? 500 : ms;
         uint64_t dps   = s.damage_total * 1000ull / denom;
         out.push_back(Snapshot{
-            s.id, s.name, s.prof, s.elite,
+            s.id, s.name, s.account, s.prof, s.elite,
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
             s.damage_to_downed, s.downs_contributed,
