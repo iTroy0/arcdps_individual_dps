@@ -109,10 +109,22 @@ bool extract_tag_name(const std::string& json, std::string& out) {
     // GitHub JSON has "tag_name":"vX.Y.Z" near the top of the object.
     // Skipping a real JSON parser keeps the dependency surface tiny —
     // the field is well-defined and we only need a literal substring.
-    const char* needle = "\"tag_name\":\"";
+    // Tolerates whitespace around the colon so a formatting change on
+    // GitHub's side can't silently kill the update check.
+    const char* needle = "\"tag_name\"";
     auto pos = json.find(needle);
     if (pos == std::string::npos) return false;
     pos += std::strlen(needle);
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' ||
+            json[pos] == '\r' || json[pos] == '\n')) ++pos;
+    if (pos >= json.size() || json[pos] != ':') return false;
+    ++pos;
+    while (pos < json.size() &&
+           (json[pos] == ' ' || json[pos] == '\t' ||
+            json[pos] == '\r' || json[pos] == '\n')) ++pos;
+    if (pos >= json.size() || json[pos] != '"') return false;
+    ++pos;
     auto end = json.find('"', pos);
     if (end == std::string::npos) return false;
     out.assign(json, pos, end - pos);

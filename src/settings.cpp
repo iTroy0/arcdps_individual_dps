@@ -90,6 +90,7 @@ namespace {
         else if (k == "responsive_columns") s.responsive_columns = std::atoi(v.c_str()) != 0;
         else if (k == "body_borders")   s.body_borders   = std::atoi(v.c_str()) != 0;
         else if (k == "bar_full_row")   s.bar_full_row   = std::atoi(v.c_str()) != 0;
+        else if (k == "show_totals")    s.show_totals    = std::atoi(v.c_str()) != 0;
         else if (k == "lock_windows")   s.lock_windows   = std::atoi(v.c_str()) != 0;
         else if (k == "chart_smooth")   s.chart_smooth   = std::atoi(v.c_str()) != 0;
         else if (k == "chart_cum")      s.chart_cum      = std::atoi(v.c_str()) != 0;
@@ -157,63 +158,96 @@ void settings_load() {
     clamp_geometry();
 }
 
+namespace {
+
+    // Content of the most recent successful write. Lets settings_autosave
+    // skip the disk when nothing changed (the common case every 15s tick).
+    std::string g_last_written;
+
+    std::string serialize_settings() {
+        const auto& s = settings();
+        char buf[4096];
+        int  off = 0;
+        auto put = [&](const char* fmt, auto... args) {
+            if (off < 0 || off >= static_cast<int>(sizeof(buf))) return;
+            int n = std::snprintf(buf + off, sizeof(buf) - off, fmt, args...);
+            if (n > 0) off += n;
+        };
+        put("# arcdps_individual_dps settings\n");
+        put("exclude_npcs=%d\n",    s.exclude_npcs    ? 1 : 0);
+        put("exclude_gadgets=%d\n", s.exclude_gadgets ? 1 : 0);
+        put("window_open=%d\n",     s.window_open     ? 1 : 0);
+        put("window_x=%.1f\n",      s.window_x);
+        put("window_y=%.1f\n",      s.window_y);
+        put("window_w=%.1f\n",      s.window_w);
+        put("window_h=%.1f\n",      s.window_h);
+        put("sort_mode=%d\n",       s.sort_mode);
+        put("sort_reverse=%d\n",    s.sort_reverse ? 1 : 0);
+        put("cleanses_open=%d\n",   s.cleanses_open ? 1 : 0);
+        put("strips_open=%d\n",     s.strips_open   ? 1 : 0);
+        put("downs_open=%d\n",      s.downs_open    ? 1 : 0);
+        put("highlight_self=%d\n",  s.highlight_self ? 1 : 0);
+        put("name_white=%d\n",      s.name_white     ? 1 : 0);
+        put("self_name_gold=%d\n",  s.self_name_gold ? 1 : 0);
+        put("self_pin_top=%d\n",    s.self_pin_top   ? 1 : 0);
+        put("responsive_columns=%d\n", s.responsive_columns ? 1 : 0);
+        put("body_borders=%d\n",    s.body_borders   ? 1 : 0);
+        put("bar_full_row=%d\n",    s.bar_full_row   ? 1 : 0);
+        put("show_totals=%d\n",     s.show_totals    ? 1 : 0);
+        put("lock_windows=%d\n",    s.lock_windows   ? 1 : 0);
+        put("chart_smooth=%d\n",    s.chart_smooth   ? 1 : 0);
+        put("chart_cum=%d\n",       s.chart_cum      ? 1 : 0);
+        put("chart_avg=%d\n",       s.chart_avg      ? 1 : 0);
+        put("chart_burst=%d\n",     s.chart_burst    ? 1 : 0);
+        put("pos_relative=%d\n",    s.pos_relative   ? 1 : 0);
+        put("window_rx=%.4f\n",     s.window_rx);
+        put("window_ry=%.4f\n",     s.window_ry);
+        put("detail_rx=%.4f\n",     s.detail_rx);
+        put("detail_ry=%.4f\n",     s.detail_ry);
+        put("detail_open=%d\n",     s.detail_open   ? 1 : 0);
+        put("detail_x=%.1f\n",      s.detail_x);
+        put("detail_y=%.1f\n",      s.detail_y);
+        put("detail_w=%.1f\n",      s.detail_w);
+        put("detail_h=%.1f\n",      s.detail_h);
+        put("window_alpha=%.2f\n",  s.window_alpha);
+        put("last_seen_version=%s\n", s.last_seen_version.c_str());
+        return std::string(buf, static_cast<size_t>(off));
+    }
+
+    void write_settings_file(const std::string& content) {
+        // Atomic write: stream to <path>.tmp, fclose, then MoveFileEx with
+        // REPLACE_EXISTING so a crash mid-write can't truncate the live ini
+        // and silently restore defaults on next load.
+        std::string final_path = ini_path();
+        std::string tmp_path   = final_path + ".tmp";
+        FILE* f = nullptr;
+        if (fopen_s(&f, tmp_path.c_str(), "wb") != 0 || !f) return;
+        std::fwrite(content.data(), 1, content.size(), f);
+        std::fflush(f);
+        std::fclose(f);
+        if (!MoveFileExA(tmp_path.c_str(), final_path.c_str(),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            // Move failed (destination locked, cross-volume, ...). The live
+            // ini is untouched; drop the orphaned .tmp so it isn't mistaken
+            // for a real file later.
+            log_line("settings_save: MoveFileEx failed (err=%lu)", GetLastError());
+            DeleteFileA(tmp_path.c_str());
+            return;
+        }
+        g_last_written = content;
+    }
+}
+
 void settings_save() {
     ScopedCNumericLocale c_locale;
-    // Atomic write: stream to <path>.tmp, fclose, then MoveFileEx with
-    // REPLACE_EXISTING so a crash mid-write can't truncate the live ini
-    // and silently restore defaults on next load.
-    std::string final_path = ini_path();
-    std::string tmp_path   = final_path + ".tmp";
-    FILE* f = nullptr;
-    if (fopen_s(&f, tmp_path.c_str(), "w") != 0 || !f) return;
-    const auto& s = settings();
-    std::fprintf(f, "# arcdps_individual_dps settings\n");
-    std::fprintf(f, "exclude_npcs=%d\n",    s.exclude_npcs    ? 1 : 0);
-    std::fprintf(f, "exclude_gadgets=%d\n", s.exclude_gadgets ? 1 : 0);
-    std::fprintf(f, "window_open=%d\n",     s.window_open     ? 1 : 0);
-    std::fprintf(f, "window_x=%.1f\n",      s.window_x);
-    std::fprintf(f, "window_y=%.1f\n",      s.window_y);
-    std::fprintf(f, "window_w=%.1f\n",      s.window_w);
-    std::fprintf(f, "window_h=%.1f\n",      s.window_h);
-    std::fprintf(f, "sort_mode=%d\n",       s.sort_mode);
-    std::fprintf(f, "sort_reverse=%d\n",    s.sort_reverse ? 1 : 0);
-    std::fprintf(f, "cleanses_open=%d\n",   s.cleanses_open ? 1 : 0);
-    std::fprintf(f, "strips_open=%d\n",     s.strips_open   ? 1 : 0);
-    std::fprintf(f, "downs_open=%d\n",      s.downs_open    ? 1 : 0);
-    std::fprintf(f, "highlight_self=%d\n",  s.highlight_self ? 1 : 0);
-    std::fprintf(f, "name_white=%d\n",      s.name_white     ? 1 : 0);
-    std::fprintf(f, "self_name_gold=%d\n",  s.self_name_gold ? 1 : 0);
-    std::fprintf(f, "self_pin_top=%d\n",    s.self_pin_top   ? 1 : 0);
-    std::fprintf(f, "responsive_columns=%d\n", s.responsive_columns ? 1 : 0);
-    std::fprintf(f, "body_borders=%d\n",    s.body_borders   ? 1 : 0);
-    std::fprintf(f, "bar_full_row=%d\n",    s.bar_full_row   ? 1 : 0);
-    std::fprintf(f, "lock_windows=%d\n",    s.lock_windows   ? 1 : 0);
-    std::fprintf(f, "chart_smooth=%d\n",    s.chart_smooth   ? 1 : 0);
-    std::fprintf(f, "chart_cum=%d\n",       s.chart_cum      ? 1 : 0);
-    std::fprintf(f, "chart_avg=%d\n",       s.chart_avg      ? 1 : 0);
-    std::fprintf(f, "chart_burst=%d\n",     s.chart_burst    ? 1 : 0);
-    std::fprintf(f, "pos_relative=%d\n",    s.pos_relative   ? 1 : 0);
-    std::fprintf(f, "window_rx=%.4f\n",     s.window_rx);
-    std::fprintf(f, "window_ry=%.4f\n",     s.window_ry);
-    std::fprintf(f, "detail_rx=%.4f\n",     s.detail_rx);
-    std::fprintf(f, "detail_ry=%.4f\n",     s.detail_ry);
-    std::fprintf(f, "detail_open=%d\n",     s.detail_open   ? 1 : 0);
-    std::fprintf(f, "detail_x=%.1f\n",      s.detail_x);
-    std::fprintf(f, "detail_y=%.1f\n",      s.detail_y);
-    std::fprintf(f, "detail_w=%.1f\n",      s.detail_w);
-    std::fprintf(f, "detail_h=%.1f\n",      s.detail_h);
-    std::fprintf(f, "window_alpha=%.2f\n",  s.window_alpha);
-    std::fprintf(f, "last_seen_version=%s\n", s.last_seen_version.c_str());
-    std::fflush(f);
-    std::fclose(f);
-    if (!MoveFileExA(tmp_path.c_str(), final_path.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        // Move failed (destination locked, cross-volume, ...). The live ini
-        // is untouched; drop the orphaned .tmp so it isn't mistaken for a
-        // real file later.
-        log_line("settings_save: MoveFileEx failed (err=%lu)", GetLastError());
-        DeleteFileA(tmp_path.c_str());
-    }
+    write_settings_file(serialize_settings());
+}
+
+void settings_autosave() {
+    ScopedCNumericLocale c_locale;
+    std::string content = serialize_settings();
+    if (content == g_last_written) return;
+    write_settings_file(content);
 }
 
 } // namespace idps

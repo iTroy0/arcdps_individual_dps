@@ -43,9 +43,10 @@ void draw_windows_section() {
     if (ImGui::Checkbox("Strips window",            &st)) s.strips_open   = st;
     if (ImGui::Checkbox("Down contribution window", &dn)) s.downs_open    = dn;
     item_tooltip("Per-player damage dealt to foes that subsequently went "
-                 "into downstate, plus the count of distinct downs they "
-                 "contributed to. Useful for measuring focus-fire and "
-                 "cleave attribution in WvW pulls.");
+                 "into downstate, the count of downs they landed the "
+                 "finishing hit on, and their killing blows on enemy "
+                 "players. Useful for measuring focus-fire and cleave "
+                 "attribution in WvW pulls.");
 }
 
 void draw_appearance_section() {
@@ -76,6 +77,11 @@ void draw_appearance_section() {
     if (ImGui::Checkbox("Full-row damage bar", &fb)) s.bar_full_row = fb;
     item_tooltip("When on, the per-player damage bar fills the entire "
                  "row width. Off restricts it to the Name column.");
+
+    bool tot = s.show_totals;
+    if (ImGui::Checkbox("Squad totals line", &tot)) s.show_totals = tot;
+    item_tooltip("Show combined squad damage, summed DPS, and player "
+                 "count above the table.");
 
     float alpha = s.window_alpha;
     ImGui::SetNextItemWidth(120.0f);
@@ -120,9 +126,16 @@ void reset_to_defaults() {
     s.highlight_self     = def.highlight_self;
     s.name_white         = def.name_white;
     s.self_name_gold     = def.self_name_gold;
+    s.self_pin_top       = def.self_pin_top;
     s.responsive_columns = def.responsive_columns;
     s.body_borders       = def.body_borders;
     s.bar_full_row       = def.bar_full_row;
+    s.show_totals        = def.show_totals;
+    s.lock_windows       = def.lock_windows;
+    s.chart_smooth       = def.chart_smooth;
+    s.chart_cum          = def.chart_cum;
+    s.chart_avg          = def.chart_avg;
+    s.chart_burst        = def.chart_burst;
     s.window_alpha       = def.window_alpha;
     s.pos_relative       = def.pos_relative;
     options().exclude_npcs.store   (def.exclude_npcs,

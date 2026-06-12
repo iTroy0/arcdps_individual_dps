@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <iterator>
 #include <windows.h>
 
@@ -109,7 +110,8 @@ namespace {
     bool has_fight_state(const AgentState& s) {
         return s.accumulated_ms > 0 || s.damage_total > 0 ||
                s.strip_count > 0 || s.cleanse_count > 0 ||
-               s.damage_to_downed > 0 || s.downs_contributed > 0;
+               s.damage_to_downed > 0 || s.downs_contributed > 0 ||
+               s.kills_contributed > 0;
     }
 
     void reset_for_new_fight(AgentState& s) {
@@ -121,6 +123,7 @@ namespace {
         s.cleanse_count       = 0;
         s.damage_to_downed    = 0;
         s.downs_contributed   = 0;
+        s.kills_contributed   = 0;
         s.alive               = true;
         s.skills.clear();
         s.history.clear();
@@ -186,10 +189,15 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                 // Tracking-remove. Keep accumulated stats until fight reset
                 // so the user can still see their row, but drop the instid
                 // mapping immediately so a new instid can rebind to a
-                // different agent without aliasing.
+                // different agent without aliasing. The per-agent instid
+                // field must clear too: find_by_instid's linear fallback
+                // scans agents_ directly, so a removed agent holding a
+                // recycled instid would otherwise soak up a new player's
+                // pet/minion damage arriving before their tracking-add.
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) {
                     instid_to_id_.erase(it->second.instid);
+                    it->second.instid  = 0;
                     it->second.present = false;
                 }
             }
@@ -535,6 +543,12 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     auto& sk = owner->skills[ev->skillid];
     sk.damage += delta;
     sk.hits   += 1;
+    if (ev->buff == 0) {
+        sk.strike_hits += 1;
+        if (ev->result == CBTR_STRIKE_DAMAGECRIT) sk.crits += 1;
+    }
+    if (sk.min_hit == 0 || delta < sk.min_hit) sk.min_hit = delta;
+    if (delta > sk.max_hit)                    sk.max_hit = delta;
     if (sk.first_hit_wall == 0) sk.first_hit_wall = now;
     sk.last_hit_wall = now;
     // Cap per-skill so heavy condi tickers (Burning, Bleed) can't blow
@@ -630,6 +644,10 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         }
 
         if (ev->result == CBTR_KILLINGBLOW) {
+            // Kill credit: arc tags exactly one event per death, and its
+            // owner dealt the lethal hit (stomps surface separately and
+            // carry no damage, so they don't reach this path).
+            owner->kills_contributed += 1;
             target_dmg_.erase(dst->id);
             downed_.erase(dst->id);
             last_attacker_.erase(dst->id);
@@ -701,6 +719,7 @@ void Tracker::reset_fight() {
             s.cleanse_count       = 0;
             s.damage_to_downed    = 0;
             s.downs_contributed   = 0;
+            s.kills_contributed   = 0;
             s.alive               = true;
             s.skills.clear();
             s.history.clear();
@@ -725,13 +744,14 @@ void Tracker::push_to_history() {
     FightSnapshot fs;
     fs.start_wall = current_fight_start_wall_;
     fs.end_wall   = wall_now();
+    fs.end_clock  = static_cast<uint64_t>(std::time(nullptr));
 
     bool has_data = false;
     for (const auto& [id, s] : agents_) {
         if (!s.is_player) continue;
         if (s.damage_total == 0 && s.strip_count == 0 &&
             s.cleanse_count == 0 && s.damage_to_downed == 0 &&
-            s.downs_contributed == 0) continue;
+            s.downs_contributed == 0 && s.kills_contributed == 0) continue;
         // Clone, then drop per-skill hits_history to keep memory bounded.
         // Spike overlay won't render for past fights; everything else
         // (DPS curve, skills table, sort) still works because totals,
@@ -789,7 +809,7 @@ bool Tracker::snapshot_at(int idx, std::vector<Snapshot>& out) const {
             s.id, s.name, s.account, s.prof, s.elite,
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
-            s.damage_to_downed, s.downs_contributed,
+            s.damage_to_downed, s.downs_contributed, s.kills_contributed,
             false,           // past fights are never "in combat"
             s.is_self,
         });
@@ -797,12 +817,20 @@ bool Tracker::snapshot_at(int idx, std::vector<Snapshot>& out) const {
     return true;
 }
 
-bool Tracker::fight_times_at(int idx, uint64_t& start_wall,
-                             uint64_t& end_wall) const {
+bool Tracker::fight_summary_at(int idx, FightSummary& out) const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    start_wall = history_[idx].start_wall;
-    end_wall   = history_[idx].end_wall;
+    const FightSnapshot& fs = history_[idx];
+    out.start_wall   = fs.start_wall;
+    out.end_wall     = fs.end_wall;
+    out.end_clock    = fs.end_clock;
+    out.total_damage = 0;
+    out.players      = 0;
+    for (const auto& [id, s] : fs.agents) {
+        if (!s.is_player) continue;
+        out.total_damage += s.damage_total;
+        ++out.players;
+    }
     return true;
 }
 
@@ -824,7 +852,7 @@ bool Tracker::agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) cons
         s.id, s.name, s.account, s.prof, s.elite,
         ms, s.damage_total, dps,
         s.strip_count, s.cleanse_count,
-        s.damage_to_downed, s.downs_contributed,
+        s.damage_to_downed, s.downs_contributed, s.kills_contributed,
         false, s.is_self,
     };
     return true;
@@ -845,6 +873,10 @@ void fill_top_skills(const AgentState& s,
         if (nit != names.end()) sd.name = nit->second;
         sd.damage         = entry.damage;
         sd.hits           = entry.hits;
+        sd.strike_hits    = entry.strike_hits;
+        sd.crits          = entry.crits;
+        sd.min_hit        = entry.min_hit;
+        sd.max_hit        = entry.max_hit;
         sd.first_hit_wall = entry.first_hit_wall;
         sd.last_hit_wall  = entry.last_hit_wall;
         all.push_back(std::move(sd));
@@ -907,6 +939,10 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
         if (nit != skill_names_.end()) sd.name = nit->second;
         sd.damage         = entry.damage;
         sd.hits           = entry.hits;
+        sd.strike_hits    = entry.strike_hits;
+        sd.crits          = entry.crits;
+        sd.min_hit        = entry.min_hit;
+        sd.max_hit        = entry.max_hit;
         sd.first_hit_wall = entry.first_hit_wall;
         sd.last_hit_wall  = entry.last_hit_wall;
         // entry.hits_history is empty by design (cleared on push_to_history)
@@ -945,6 +981,10 @@ void Tracker::detail(uintptr_t id, AgentDetail& out) const {
             sd.name           = nit != skill_names_.end() ? nit->second : std::string();
             sd.damage         = entry.damage;
             sd.hits           = entry.hits;
+            sd.strike_hits    = entry.strike_hits;
+            sd.crits          = entry.crits;
+            sd.min_hit        = entry.min_hit;
+            sd.max_hit        = entry.max_hit;
             sd.first_hit_wall = entry.first_hit_wall;
             sd.last_hit_wall  = entry.last_hit_wall;
             sd.hits_history.assign(entry.hits_history.begin(),
@@ -995,7 +1035,7 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
             s.id, s.name, s.account, s.prof, s.elite,
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
-            s.damage_to_downed, s.downs_contributed,
+            s.damage_to_downed, s.downs_contributed, s.kills_contributed,
             s.in_combat_wall.has_value(),
             s.is_self,
         });

@@ -21,6 +21,12 @@ struct SkillHit {
 struct SkillEntry {
     uint64_t damage          = 0;
     uint32_t hits            = 0;
+    // Strike-only counters: condi ticks can't crit, so crit% is computed
+    // against strike_hits, not hits.
+    uint32_t strike_hits     = 0;
+    uint32_t crits           = 0;
+    uint64_t min_hit         = 0;
+    uint64_t max_hit         = 0;
     uint64_t first_hit_wall  = 0;
     uint64_t last_hit_wall   = 0;
     // Bounded; oldest entries pruned first.
@@ -68,6 +74,8 @@ struct AgentState {
 
     uint64_t              damage_to_downed   = 0;
     uint32_t              downs_contributed  = 0;
+    // Killing blows landed on enemy players (CBTR_KILLINGBLOW).
+    uint32_t              kills_contributed  = 0;
 
     // deque so FIFO cap is O(1) — vector::erase(begin()) would shift 4095
     // entries on every sample once full.
@@ -80,6 +88,10 @@ struct SkillDetail {
     std::string             name;
     uint64_t                damage;
     uint32_t                hits;
+    uint32_t                strike_hits;
+    uint32_t                crits;
+    uint64_t                min_hit;
+    uint64_t                max_hit;
     uint64_t                first_hit_wall;
     uint64_t                last_hit_wall;
     std::vector<SkillHit>   hits_history;
@@ -104,7 +116,21 @@ struct AgentDetail {
 struct FightSnapshot {
     uint64_t                                  start_wall = 0;
     uint64_t                                  end_wall   = 0;
+    // Unix seconds captured at fight close. start/end_wall are
+    // GetTickCount64 ms (monotonic since boot) and cannot be mapped to
+    // clock time after the fact, so the close moment is stamped here.
+    uint64_t                                  end_clock  = 0;
     std::unordered_map<uintptr_t, AgentState> agents;
+};
+
+// Lightweight per-fight header for history menus: no agent copies, safe
+// to call every frame while a popup is open.
+struct FightSummary {
+    uint64_t start_wall   = 0;
+    uint64_t end_wall     = 0;
+    uint64_t end_clock    = 0; // unix seconds; 0 = unknown
+    uint64_t total_damage = 0;
+    int      players      = 0;
 };
 
 struct Snapshot {
@@ -120,6 +146,7 @@ struct Snapshot {
     uint32_t    cleanse_count;
     uint64_t    damage_to_downed;
     uint32_t    downs_contributed;
+    uint32_t    kills_contributed;
     bool        in_combat;
     bool        is_self;
 };
@@ -141,7 +168,7 @@ public:
     int  history_size() const;
     bool snapshot_at(int idx, std::vector<Snapshot>& out) const;
     bool detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const;
-    bool fight_times_at(int idx, uint64_t& start_wall, uint64_t& end_wall) const;
+    bool fight_summary_at(int idx, FightSummary& out) const;
     // Single-agent past-fight readout for the per-row "fight history"
     // context menu. Cheaper than calling snapshot_at + scanning.
     bool agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) const;

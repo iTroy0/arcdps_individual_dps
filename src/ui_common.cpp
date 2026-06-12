@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 
 namespace idps {
 
@@ -50,6 +51,27 @@ void format_count(char* out, size_t n, uint64_t v) {
     if (v >= 1000000) std::snprintf(out, n, "%.2fm", v / 1000000.0);
     else if (v >= 10000) std::snprintf(out, n, "%.1fk", v / 1000.0);
     else std::snprintf(out, n, "%llu", (unsigned long long)v);
+}
+
+void format_clock(char* out, size_t n, uint64_t unix_s) {
+    if (n == 0) return;
+    out[0] = '\0';
+    if (unix_s == 0) return;
+    time_t t = static_cast<time_t>(unix_s);
+    struct tm local{};
+    if (localtime_s(&local, &t) != 0) return;
+    std::snprintf(out, n, "%02d:%02d", local.tm_hour, local.tm_min);
+}
+
+void format_ago(char* out, size_t n, uint64_t unix_s) {
+    if (n == 0) return;
+    out[0] = '\0';
+    if (unix_s == 0) return;
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    uint64_t d   = now > unix_s ? now - unix_s : 0;
+    if (d < 60)        std::snprintf(out, n, "%llus ago", (unsigned long long)d);
+    else if (d < 3600) std::snprintf(out, n, "%llum ago", (unsigned long long)(d / 60));
+    else               std::snprintf(out, n, "%lluh ago", (unsigned long long)(d / 3600));
 }
 
 // Drop alpha to ~67% for out-of-combat rows. 50% washed names out against

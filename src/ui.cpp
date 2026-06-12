@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -101,9 +102,12 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     if (viewed_fight > 0 && viewed_start_wall != 0) {
         int relocated = 0;
         for (int back = 1; back <= hist_n; ++back) {
-            uint64_t fs_s = 0, fs_e = 0;
-            tracker().fight_times_at(hist_n - back, fs_s, fs_e);
-            if (fs_s == viewed_start_wall) { relocated = back; break; }
+            FightSummary fsum;
+            if (tracker().fight_summary_at(hist_n - back, fsum) &&
+                fsum.start_wall == viewed_start_wall) {
+                relocated = back;
+                break;
+            }
         }
         viewed_fight = relocated;
         if (viewed_fight == 0) viewed_start_wall = 0;
@@ -127,7 +131,11 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     if (s.self_pin_top)  pin_self_to_top(g_rows);
 
     uint64_t total_damage = 0;
-    for (const auto& r : g_rows) total_damage += r.damage_total;
+    uint64_t total_dps    = 0;
+    for (const auto& r : g_rows) {
+        total_damage += r.damage_total;
+        total_dps    += r.dps;
+    }
 
     bool open = s.window_open;
     ImGuiWindowFlags lock_flags = s.lock_windows
@@ -154,6 +162,76 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             if (viewing_history) {
                 ImGui::EndDisabled();
                 ImGui::TextDisabled("(viewing past - go to Current to reset)");
+            }
+            ImGui::SameLine();
+            // Plain-text snapshot of the visible table (current sort order)
+            // for pasting into squad/guild chat or Discord.
+            if (ImGui::Button("Copy summary")) {
+                uint64_t max_ms = 0;
+                for (const auto& r : g_rows) {
+                    if (r.combat_ms > max_ms) max_ms = r.combat_ms;
+                }
+                char tbuf[32], line[160];
+                format_time(tbuf, sizeof(tbuf), max_ms);
+                std::string out;
+                out.reserve(64 + g_rows.size() * 48);
+                char dmgbuf[16], dpsbuf[16];
+                format_count(dmgbuf, sizeof(dmgbuf), total_damage);
+                std::snprintf(line, sizeof(line),
+                              "Damage summary (%s, %s total)\n", tbuf, dmgbuf);
+                out += line;
+                int rank = 0;
+                for (const auto& r : g_rows) {
+                    ++rank;
+                    format_count(dmgbuf, sizeof(dmgbuf), r.damage_total);
+                    format_count(dpsbuf, sizeof(dpsbuf), r.dps);
+                    double pct = total_damage > 0
+                               ? 100.0 * static_cast<double>(r.damage_total) /
+                                 static_cast<double>(total_damage)
+                               : 0.0;
+                    std::snprintf(line, sizeof(line),
+                                  "%2d. %-22s %8s  %7s dps  %3.0f%%\n",
+                                  rank, r.name.c_str(), dmgbuf, dpsbuf, pct);
+                    out += line;
+                }
+                ImGui::SetClipboardText(out.c_str());
+                ImGui::CloseCurrentPopup();
+            }
+            // Fight history is reachable here too — the per-row menu
+            // needs a row to right-click, which an empty table doesn't
+            // have. Newest first (back = 1 is the most recent).
+            ImGui::Separator();
+            ImGui::TextDisabled("Fight history");
+            if (viewed_fight != 0) {
+                if (ImGui::MenuItem("Current (live)")) {
+                    viewed_fight      = 0;
+                    viewed_start_wall = 0;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            if (hist_n == 0) {
+                ImGui::TextDisabled("(no past fights yet)");
+            }
+            for (int back = 1; back <= hist_n; ++back) {
+                FightSummary fsum;
+                if (!tracker().fight_summary_at(hist_n - back, fsum))
+                    continue;
+                uint64_t dur = fsum.end_wall > fsum.start_wall
+                             ? fsum.end_wall - fsum.start_wall : 0;
+                char dbuf[32], cbuf[16], dmgbuf[16], label[128];
+                format_time (dbuf, sizeof(dbuf), dur);
+                format_clock(cbuf, sizeof(cbuf), fsum.end_clock);
+                format_count(dmgbuf, sizeof(dmgbuf), fsum.total_damage);
+                snprintf(label, sizeof(label),
+                         "-%d  %s  (%s)   %s dmg   %d players",
+                         back, cbuf[0] ? cbuf : "--:--", dbuf,
+                         dmgbuf, fsum.players);
+                bool selected = (viewed_fight == back);
+                if (ImGui::MenuItem(label, nullptr, selected)) {
+                    viewed_fight      = back;
+                    viewed_start_wall = fsum.start_wall;
+                    ImGui::CloseCurrentPopup();
+                }
             }
             ImGui::EndPopup();
         }
@@ -192,19 +270,39 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
         // view stays uncluttered. Nav happens via right-click on a row -> Fight
         // history menu; no arrows.
         if (viewing_history) {
-            uint64_t fs_start = 0, fs_end = 0;
+            FightSummary fsum;
             int storage_idx = hist_n - viewed_fight;
-            tracker().fight_times_at(storage_idx, fs_start, fs_end);
-            uint64_t dur_ms = fs_end > fs_start ? fs_end - fs_start : 0;
-            char dbuf[32];
-            format_time(dbuf, sizeof(dbuf), dur_ms);
-            ImGui::Text("Viewing Fight -%d  (%s) - right-click a row to switch",
-                        viewed_fight, dbuf);
+            tracker().fight_summary_at(storage_idx, fsum);
+            uint64_t dur_ms = fsum.end_wall > fsum.start_wall
+                            ? fsum.end_wall - fsum.start_wall : 0;
+            char dbuf[32], cbuf[16], agobuf[24];
+            format_time (dbuf,   sizeof(dbuf),   dur_ms);
+            format_clock(cbuf,   sizeof(cbuf),   fsum.end_clock);
+            format_ago  (agobuf, sizeof(agobuf), fsum.end_clock);
+            if (cbuf[0]) {
+                ImGui::Text("Viewing Fight -%d  %s (%s)  ended %s",
+                            viewed_fight, cbuf, dbuf, agobuf);
+            } else {
+                ImGui::Text("Viewing Fight -%d  (%s)", viewed_fight, dbuf);
+            }
             ImGui::SameLine();
             if (ImGui::SmallButton("Live")) {
                 viewed_fight      = 0;
                 viewed_start_wall = 0;
             }
+            ImGui::Separator();
+        }
+
+        // Squad totals strip. Reflects whichever fight is on screen (live
+        // or past) because it sums the same rows the table renders.
+        if (s.show_totals && !g_rows.empty()) {
+            char dmgbuf[16], dpsbuf[16];
+            format_count(dmgbuf, sizeof(dmgbuf), total_damage);
+            format_count(dpsbuf, sizeof(dpsbuf), total_dps);
+            ImGui::TextColored(ImVec4(0.72f, 0.78f, 0.85f, 1.0f),
+                               "Squad  %s dmg   %s dps   %d players",
+                               dmgbuf, dpsbuf,
+                               static_cast<int>(g_rows.size()));
             ImGui::Separator();
         }
 
@@ -219,23 +317,37 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             ImGuiTableFlags_ScrollY;
         if (!s.body_borders) table_flags |= ImGuiTableFlags_NoBordersInBody;
         if (ImGui::BeginTable("idps", 6, table_flags)) {
+            // Seed the header sort arrow from the persisted sort_mode so the
+            // indicator matches the actual row order on launch (DefaultSort
+            // only applies when ImGui has no saved table state — harmless
+            // otherwise).
+            auto def_sort = [&](int mode) {
+                return s.sort_mode == mode
+                     ? ImGuiTableColumnFlags_DefaultSort
+                     : ImGuiTableColumnFlags_None;
+            };
             ImGui::TableSetupColumn("Prof",
-                                    ImGuiTableColumnFlags_WidthFixed, 22.0f);
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_NoSort, 22.0f);
             ImGui::TableSetupColumn("Name",
-                                    ImGuiTableColumnFlags_WidthStretch);
+                                    ImGuiTableColumnFlags_WidthStretch |
+                                    def_sort(2));
             // Numeric columns prefer descending on first click (high-to-low
             // is the natural read for DPS / damage / combat / share).
             ImGui::TableSetupColumn("DPS",
                                     ImGuiTableColumnFlags_WidthFixed |
-                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    ImGuiTableColumnFlags_PreferSortDescending |
+                                    def_sort(1),
                                     56.0f);
             ImGui::TableSetupColumn("Damage",
                                     ImGuiTableColumnFlags_WidthFixed |
-                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    ImGuiTableColumnFlags_PreferSortDescending |
+                                    def_sort(0),
                                     64.0f);
             ImGui::TableSetupColumn("Time",
                                     ImGuiTableColumnFlags_WidthFixed |
-                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    ImGuiTableColumnFlags_PreferSortDescending |
+                                    def_sort(3),
                                     48.0f);
             ImGui::TableSetupColumn("%",
                                     ImGuiTableColumnFlags_WidthFixed |
@@ -276,6 +388,15 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             }
 
             if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+                // The first dirty pass is table setup (DefaultSort / restored
+                // ImGui state), not a user click. Consuming it without
+                // applying keeps the ini-persisted sort_mode + sort_reverse
+                // authoritative across sessions.
+                static bool sort_seeded = false;
+                if (specs->SpecsDirty && !sort_seeded) {
+                    sort_seeded = true;
+                    specs->SpecsDirty = false;
+                }
                 if (specs->SpecsDirty) {
                     if (specs->SpecsCount > 0) {
                         int col_idx = specs->Specs[0].ColumnIndex;
@@ -474,13 +595,19 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         if (n_hist == 0) {
                             ImGui::TextDisabled("(no past fights yet)");
                         }
+                        // back = 1 is the most recent fight — list is
+                        // newest-first by construction.
                         for (int back = 1; back <= n_hist; ++back) {
                             int storage_idx = n_hist - back;
-                            uint64_t fs_start = 0, fs_end = 0;
-                            tracker().fight_times_at(storage_idx, fs_start, fs_end);
-                            uint64_t dur = fs_end > fs_start ? fs_end - fs_start : 0;
-                            char dbuf[32];
-                            format_time(dbuf, sizeof(dbuf), dur);
+                            FightSummary fsum;
+                            if (!tracker().fight_summary_at(storage_idx, fsum))
+                                continue;
+                            uint64_t dur = fsum.end_wall > fsum.start_wall
+                                         ? fsum.end_wall - fsum.start_wall : 0;
+                            char dbuf[32], cbuf[16];
+                            format_time (dbuf, sizeof(dbuf), dur);
+                            format_clock(cbuf, sizeof(cbuf), fsum.end_clock);
+                            const char* clock = cbuf[0] ? cbuf : "--:--";
                             Snapshot ag{};
                             char label[160];
                             if (tracker().agent_snapshot_at(storage_idx, r.id, ag)) {
@@ -488,17 +615,17 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                 format_count(dpsbuf, sizeof(dpsbuf), ag.dps);
                                 format_count(dmgbuf, sizeof(dmgbuf), ag.damage_total);
                                 snprintf(label, sizeof(label),
-                                         "Fight -%d  (%s)   %s DPS   %s dmg",
-                                         back, dbuf, dpsbuf, dmgbuf);
+                                         "-%d  %s  (%s)   %s DPS   %s dmg",
+                                         back, clock, dbuf, dpsbuf, dmgbuf);
                             } else {
                                 snprintf(label, sizeof(label),
-                                         "Fight -%d  (%s)   (not present)",
-                                         back, dbuf);
+                                         "-%d  %s  (%s)   (not present)",
+                                         back, clock, dbuf);
                             }
                             bool selected = (viewed_fight == back);
                             if (ImGui::MenuItem(label, nullptr, selected)) {
                                 viewed_fight      = back;
-                                viewed_start_wall = fs_start;
+                                viewed_start_wall = fsum.start_wall;
                                 ImGui::CloseCurrentPopup();
                             }
                         }
@@ -509,7 +636,11 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 }
                 ImGui::TableNextColumn();
                 char buf[16];
-                format_count(buf, sizeof(buf), smooth_dps(r.id, r.dps));
+                // Past fights are static — smoothing them would EMA-blend
+                // stale values into the live cache and lag the displayed
+                // number behind the stored result.
+                format_count(buf, sizeof(buf),
+                             viewing_history ? r.dps : smooth_dps(r.id, r.dps));
                 ImGui::TextUnformatted(buf);
                 ImGui::TableNextColumn();
                 format_count(buf, sizeof(buf), r.damage_total);
@@ -541,7 +672,21 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     if (s.downs_open) draw_downs_window(&s.downs_open, g_rows);
     draw_detail_window(viewed_fight);
 
-    prune_dps_cache(g_rows);
+    // While viewing history g_rows holds past-fight agents; pruning against
+    // them would evict every live agent's EMA state.
+    if (!viewing_history) prune_dps_cache(g_rows);
+
+    // Crash resilience: flush settings periodically (no-op when unchanged)
+    // so a game crash doesn't revert the session's layout/options to the
+    // last clean exit.
+    {
+        static uint64_t last_autosave = GetTickCount64();
+        uint64_t now = GetTickCount64();
+        if (now - last_autosave >= 15000) {
+            last_autosave = now;
+            settings_autosave();
+        }
+    }
     return 0;
 }
 

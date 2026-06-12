@@ -9,3 +9,6 @@ build/
 .vs/
 .vscode/
 CMakeUserPresets.json
+
+.omc/
+graphify-out/
