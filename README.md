@@ -22,22 +22,29 @@ load and arcdps downloads + reloads the DLL whenever a newer version exists.
   window denominator (matches arcdps `Damage (excl)`), click headers to sort
 - Per-self fight boundaries — squadmates entering / leaving combat don't reset
   your row
-- Fight history — the last 5 fights are kept; right-click a player row to step
-  back through them
+- Fight history — the last 5 fights are kept, newest first, each stamped
+  with its end time (clock + "Xm ago"), duration, squad damage, and player
+  count; browse them from the window right-click menu or a player row's
+  context menu
 - Colored per-player damage bars, profession icons, optional gold self-name and
   pin-self-to-top
 - Click a row → detail window: DPS-over-time graph with smoothed / cumulative /
   average / burst overlay layers (toggle each from the legend), crosshair
-  tooltip, and a per-skill breakdown sorted by damage
+  tooltip, and a per-skill breakdown sorted by damage with crit % and
+  per-hit min / avg / max stats on hover
+- Squad totals line (Σ damage, Σ DPS, player count) + right-click →
+  "Copy summary" puts the visible table on the clipboard as plain text
 - Cleanses / Strips side windows
 - Down-contribution window — damage to enemy players up to the moment they go
-  down, plus the count of downs you personally landed the finishing hit on
+  down, the count of downs you personally landed the finishing hit on, and
+  your killing blows on enemy players
 - Post-update banner — one-shot notice after arcdps swaps in a new build
 - Layout — responsive columns, lockable windows, screen-relative positioning,
   window opacity slider (0.10 – 1.00)
 - NPC / Gadget exclusion filters
 - Right-click menu + arcdps options-panel tab; settings persist to
-  `arcdps_individual_dps.ini`
+  `arcdps_individual_dps.ini` (auto-saved every ~15 s while playing, so a
+  game crash doesn't lose your layout)
 
 ## Install
 

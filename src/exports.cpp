@@ -22,7 +22,7 @@ namespace {
     // Single source of truth for the version string. Bump this one line
     // per release. kVersion is read at runtime (idps::version(), the
     // get_update_url semver compare); kBuild is arc's out_build display.
-    #define IDPS_VERSION "0.7.7"
+    #define IDPS_VERSION "0.8.0"
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = IDPS_VERSION;
     constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";

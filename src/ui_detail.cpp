@@ -107,7 +107,7 @@ void draw_detail_window(int viewed_history_idx) {
     // benefits from being resized to fit different fight lengths, and the
     // user opens it on demand rather than as a persistent overlay.
     if (ImGui::Begin(title, &open)) {
-        // ESC dismissal lives in mod_wnd_filter (exports.cpp) via
+        // ESC dismissal lives in mod_wnd_nofilter (exports.cpp) via
         // consume_esc_for_detail() — arc swallows ESC at the wndproc layer
         // before ImGui::IsKeyPressed sees it.
         ImVec2 dpos = ImGui::GetWindowPos();
@@ -575,13 +575,14 @@ void draw_detail_window(int viewed_history_idx) {
             if (!still_present) g_selected_skill = 0;
         }
 
-        if (ImGui::BeginTable("skills", 6, sk_flags)) {
+        if (ImGui::BeginTable("skills", 7, sk_flags)) {
             ImGui::TableSetupColumn("#",      ImGuiTableColumnFlags_WidthFixed, 22.0f);
             ImGui::TableSetupColumn("Skill",  ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Damage", ImGuiTableColumnFlags_WidthFixed, 64.0f);
             ImGui::TableSetupColumn("%",      ImGuiTableColumnFlags_WidthFixed, 36.0f);
             ImGui::TableSetupColumn("DPS",    ImGuiTableColumnFlags_WidthFixed, 56.0f);
             ImGui::TableSetupColumn("Hits",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableSetupColumn("Crit",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
             ImGui::TableHeadersRow();
 
             int rank = 0;
@@ -617,6 +618,31 @@ void draw_detail_window(int viewed_history_idx) {
                                       ImGuiSelectableFlags_AllowOverlap)) {
                     g_selected_skill = is_sel ? 0u : sk.skill_id;
                 }
+                // Per-hit stats tooltip. All values are already in the
+                // local SkillDetail copy — no tracker lock needed.
+                if (ImGui::IsItemHovered() && sk.hits > 0) {
+                    char minb[16], maxb[16], avgb[16];
+                    format_count(minb, sizeof(minb), sk.min_hit);
+                    format_count(maxb, sizeof(maxb), sk.max_hit);
+                    format_count(avgb, sizeof(avgb), sk.damage / sk.hits);
+                    anchor_cursor_tooltip();
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(!sk.name.empty() ? sk.name.c_str()
+                                                            : "(unknown)");
+                    ImGui::Separator();
+                    ImGui::Text("hit avg %s   min %s   max %s",
+                                avgb, minb, maxb);
+                    if (sk.strike_hits > 0) {
+                        ImGui::Text("crit %u / %u (%.0f%%)",
+                                    sk.crits, sk.strike_hits,
+                                    100.0f * static_cast<float>(sk.crits) /
+                                    static_cast<float>(sk.strike_hits));
+                    } else {
+                        ImGui::TextDisabled("condition damage (no crits)");
+                    }
+                    ImGui::TextDisabled("click row to toggle spike overlay");
+                    ImGui::EndTooltip();
+                }
                 ImGui::PopID();
 
                 ImGui::TableNextColumn();
@@ -647,6 +673,16 @@ void draw_detail_window(int viewed_history_idx) {
                 ImGui::TextUnformatted(buf);
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", sk.hits);
+                ImGui::TableNextColumn();
+                // Crit% over strike hits only — condi ticks can't crit, so
+                // pure condition skills read "-" instead of a fake 0%.
+                if (sk.strike_hits > 0) {
+                    ImGui::Text("%.0f%%",
+                                100.0f * static_cast<float>(sk.crits) /
+                                static_cast<float>(sk.strike_hits));
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
             }
             ImGui::EndTable();
         }

@@ -31,6 +31,9 @@ struct Settings {
     bool  body_borders    = false;
     bool  bar_full_row    = true;
 
+    // Squad totals line (Σ damage / Σ DPS / player count) above the table.
+    bool  show_totals     = true;
+
     // UI anchor: when on, all plugin windows refuse Move/Resize so they
     // stay locked to their current position and size. Off by default.
     bool  lock_windows    = false;
@@ -70,5 +73,11 @@ Settings& settings();
 
 void settings_load();
 void settings_save();
+
+// Cheap periodic flush: serializes the current settings and writes only
+// when the content differs from the last write. Call from the render
+// thread (~every 15s) so a game crash doesn't lose the session's layout
+// — settings_save() in mod_release never runs on a hard crash.
+void settings_autosave();
 
 } // namespace idps

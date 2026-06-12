@@ -129,7 +129,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
             ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
         if (!settings().body_borders) f |= ImGuiTableFlags_NoBordersInBody;
-        if (ImGui::BeginTable("downs", 4, f)) {
+        if (ImGui::BeginTable("downs", 5, f)) {
             ImGui::TableSetupColumn("Prof",
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_NoSort, 22.0f);
@@ -143,6 +143,10 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     44.0f);
+            ImGui::TableSetupColumn("Kills",
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    ImGuiTableColumnFlags_PreferSortDescending,
+                                    40.0f);
             ImGui::TableHeadersRow();
 
             int  sort_col = 2;
@@ -166,6 +170,8 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                         case 1:  less = ra.name < rb.name; break;
                         case 3:  less = ra.downs_contributed <
                                         rb.downs_contributed; break;
+                        case 4:  less = ra.kills_contributed <
+                                        rb.kills_contributed; break;
                         case 2:
                         default: less = ra.damage_to_downed <
                                         rb.damage_to_downed; break;
@@ -232,6 +238,8 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
                 ImGui::TextUnformatted(buf);
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", r.downs_contributed);
+                ImGui::TableNextColumn();
+                ImGui::Text("%u", r.kills_contributed);
             }
             ImGui::EndTable();
         }

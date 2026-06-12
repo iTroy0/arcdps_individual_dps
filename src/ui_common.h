@@ -16,6 +16,12 @@ const char* prof_short(uint32_t prof);
 void format_time (char* out, size_t n, uint64_t ms);
 void format_count(char* out, size_t n, uint64_t v);
 
+// Local clock "21:34" from unix seconds. Empty string when unix_s == 0.
+void format_clock(char* out, size_t n, uint64_t unix_s);
+// Relative "42s ago" / "5m ago" / "2h ago" from unix seconds. Empty
+// string when unix_s == 0.
+void format_ago  (char* out, size_t n, uint64_t unix_s);
+
 ImU32 dim_alpha(ImU32 col);
 
 void sort_rows(std::vector<Snapshot>& rows, int mode);
