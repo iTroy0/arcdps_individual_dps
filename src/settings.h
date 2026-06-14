@@ -7,6 +7,11 @@ namespace idps {
 struct Settings {
     bool  exclude_npcs    = false;
     bool  exclude_gadgets = false;
+
+    // Smart fight boundaries (see Options in tracker.h). Seconds clamped
+    // to [1, 60] on load.
+    bool  fight_gap_enabled = true;
+    int   fight_gap_seconds = 5;
     bool  window_open     = true;
     float window_x        = -1.0f;
     float window_y        = -1.0f;

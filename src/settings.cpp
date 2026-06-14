@@ -68,6 +68,13 @@ namespace {
         auto& s = settings();
         if (k == "exclude_npcs")    s.exclude_npcs    = std::atoi(v.c_str()) != 0;
         else if (k == "exclude_gadgets") s.exclude_gadgets = std::atoi(v.c_str()) != 0;
+        else if (k == "fight_gap_enabled") s.fight_gap_enabled = std::atoi(v.c_str()) != 0;
+        else if (k == "fight_gap_seconds") {
+            int sec = std::atoi(v.c_str());
+            if (sec < 1)  sec = 1;
+            if (sec > 60) sec = 60;
+            s.fight_gap_seconds = sec;
+        }
         else if (k == "window_open") s.window_open = std::atoi(v.c_str()) != 0;
         else if (k == "window_x")    s.window_x = static_cast<float>(std::atof(v.c_str()));
         else if (k == "window_y")    s.window_y = static_cast<float>(std::atof(v.c_str()));
@@ -176,6 +183,8 @@ namespace {
         put("# arcdps_individual_dps settings\n");
         put("exclude_npcs=%d\n",    s.exclude_npcs    ? 1 : 0);
         put("exclude_gadgets=%d\n", s.exclude_gadgets ? 1 : 0);
+        put("fight_gap_enabled=%d\n", s.fight_gap_enabled ? 1 : 0);
+        put("fight_gap_seconds=%d\n", s.fight_gap_seconds);
         put("window_open=%d\n",     s.window_open     ? 1 : 0);
         put("window_x=%.1f\n",      s.window_x);
         put("window_y=%.1f\n",      s.window_y);

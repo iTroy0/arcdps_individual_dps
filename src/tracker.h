@@ -58,6 +58,17 @@ struct AgentState {
     uint64_t              damage_total    = 0;
     bool                  alive           = true;
 
+    // Deferred fight reset (smart fight boundaries). Set on ENTERCOMBAT
+    // when the agent's last action is older than the fight gap: the row
+    // keeps its previous-fight stats until the FIRST credited action
+    // (damage or cleanse/strip) of the new fight, so passive combat entry
+    // (NPC aggro, stray AoE) never wipes a row. Cleared on the deferred
+    // reset, on combat exit, and on every global fight boundary.
+    bool                  fight_armed     = false;
+    // Last credited action (damage dealt or cleanse/strip). Drives the
+    // resume-vs-new-fight decision on combat entry.
+    uint64_t              last_activity_wall = 0;
+
     // Active-damage window matches arc's Damage panel.
     uint64_t              first_damage_wall = 0;
     uint64_t              last_damage_wall  = 0;
@@ -157,8 +168,12 @@ public:
                    const char* skillname, uint64_t id, uint64_t revision);
 
     // Caller-owned output buffers avoid per-frame heap allocations.
+    // spike_skill: per-hit history (hits_history) is copied only for this
+    // skill id — the spike overlay reads exactly one skill's timeline and
+    // copying the other ~50 deques per frame was the detail window's
+    // dominant cost under the combat mutex. 0 = copy none.
     void snapshot(std::vector<Snapshot>& out) const;
-    void detail(uintptr_t id, AgentDetail& out) const;
+    void detail(uintptr_t id, AgentDetail& out, uint32_t spike_skill = 0) const;
     void reset_fight();
 
     // Past-fight history (B+C design). Index 0 = oldest stored fight,
@@ -167,7 +182,8 @@ public:
     // indices. See FightSnapshot for memory caveats.
     int  history_size() const;
     bool snapshot_at(int idx, std::vector<Snapshot>& out) const;
-    bool detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const;
+    bool detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
+                   uint32_t spike_skill = 0) const;
     bool fight_summary_at(int idx, FightSummary& out) const;
     // Single-agent past-fight readout for the per-row "fight history"
     // context menu. Cheaper than calling snapshot_at + scanning.
@@ -181,6 +197,7 @@ public:
 
 private:
     void on_statechange(cbtevent* ev, ag* src, ag* dst);
+    void on_buff_remove(cbtevent* ev, ag* src, ag* dst);
     void on_damage(cbtevent* ev, ag* src, ag* dst,
                    const char* skillname, uint64_t revision);
 
@@ -237,6 +254,13 @@ Tracker& tracker();
 struct Options {
     std::atomic<bool> exclude_npcs{false};
     std::atomic<bool> exclude_gadgets{false};
+    // Smart fight boundaries: re-entering combat within fight_gap_ms of
+    // the last action resumes the same fight; beyond it the row resets
+    // lazily on the first action (see AgentState::fight_armed). Fights
+    // shorter than the gap are skipped from history unless they scored a
+    // down or kill. Disabled = legacy immediate reset on ENTERCOMBAT.
+    std::atomic<bool>     fight_gap_enabled{true};
+    std::atomic<uint32_t> fight_gap_ms{5000};
 };
 Options& options();
 

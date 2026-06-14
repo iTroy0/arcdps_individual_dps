@@ -15,6 +15,34 @@ namespace {
 
 void draw_filters_section() {
     auto& s = settings();
+
+    bool gap_en = s.fight_gap_enabled;
+    if (ImGui::Checkbox("Smart fight boundaries", &gap_en)) {
+        s.fight_gap_enabled = gap_en;
+        options().fight_gap_enabled.store(gap_en, std::memory_order_relaxed);
+    }
+    item_tooltip("Re-entering combat within the gap of your last action "
+                 "resumes the same fight. Beyond it, your row keeps its "
+                 "previous stats and resets only when you next deal damage "
+                 "or cleanse/strip - so NPC aggro or stray AoE never wipes "
+                 "your numbers. Fights shorter than the gap are not saved "
+                 "to history unless someone scored a down or kill. Off = "
+                 "rows reset immediately on every combat entry.");
+    ImGui::SameLine();
+    int gap_sec = s.fight_gap_seconds;
+    ImGui::SetNextItemWidth(90.0f);
+    if (ImGui::InputInt("##fight_gap_sec", &gap_sec, 1, 5)) {
+        if (gap_sec < 1)  gap_sec = 1;
+        if (gap_sec > 60) gap_sec = 60;
+        s.fight_gap_seconds = gap_sec;
+        options().fight_gap_ms.store(static_cast<uint32_t>(gap_sec) * 1000u,
+                                     std::memory_order_relaxed);
+    }
+    item_tooltip("Gap length in seconds (1-60). Default 5.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("s");
+    ImGui::Separator();
+
     bool ex_npcs    = options().exclude_npcs.load(std::memory_order_relaxed);
     bool ex_gadgets = options().exclude_gadgets.load(std::memory_order_relaxed);
     if (ImGui::Checkbox("Exclude NPCs", &ex_npcs)) {
@@ -121,6 +149,8 @@ void reset_to_defaults() {
     auto& s = settings();
     s.exclude_npcs       = def.exclude_npcs;
     s.exclude_gadgets    = def.exclude_gadgets;
+    s.fight_gap_enabled  = def.fight_gap_enabled;
+    s.fight_gap_seconds  = def.fight_gap_seconds;
     s.sort_mode          = def.sort_mode;
     s.sort_reverse       = def.sort_reverse;
     s.highlight_self     = def.highlight_self;
@@ -142,6 +172,11 @@ void reset_to_defaults() {
                                     std::memory_order_relaxed);
     options().exclude_gadgets.store(def.exclude_gadgets,
                                     std::memory_order_relaxed);
+    options().fight_gap_enabled.store(def.fight_gap_enabled,
+                                      std::memory_order_relaxed);
+    options().fight_gap_ms.store(
+        static_cast<uint32_t>(def.fight_gap_seconds) * 1000u,
+        std::memory_order_relaxed);
 }
 
 void draw_settings_sections(bool default_open) {

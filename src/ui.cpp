@@ -665,12 +665,20 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     ImGui::End();
     s.window_open = open;
 
+    bool go_live = false;
     if (s.cleanses_open || s.strips_open) {
-        draw_support_window("Cleanses", &s.cleanses_open, g_rows, &Snapshot::cleanse_count);
-        draw_support_window("Strips",   &s.strips_open,   g_rows, &Snapshot::strip_count);
+        draw_support_window("Cleanses", &s.cleanses_open, g_rows,
+                            &Snapshot::cleanse_count, viewed_fight, &go_live);
+        draw_support_window("Strips",   &s.strips_open,   g_rows,
+                            &Snapshot::strip_count,   viewed_fight, &go_live);
     }
-    if (s.downs_open) draw_downs_window(&s.downs_open, g_rows);
+    if (s.downs_open)
+        draw_downs_window(&s.downs_open, g_rows, viewed_fight, &go_live);
     draw_detail_window(viewed_fight);
+    if (go_live) {
+        viewed_fight      = 0;
+        viewed_start_wall = 0;
+    }
 
     // While viewing history g_rows holds past-fight agents; pruning against
     // them would evict every live agent's EMA state.

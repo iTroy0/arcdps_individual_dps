@@ -15,6 +15,27 @@ namespace idps {
 namespace {
     // Reused index buffer so we don't reallocate per render.
     std::vector<size_t> g_sort_idx;
+
+    // "Title (Fight -N)###Title" — the ### keeps the window identity (and
+    // saved position/size) stable while the visible label tracks the view.
+    void fight_window_title(char* out, size_t n, const char* base,
+                            int viewed_fight) {
+        if (viewed_fight > 0) {
+            std::snprintf(out, n, "%s (Fight -%d)###%s",
+                          base, viewed_fight, base);
+        } else {
+            std::snprintf(out, n, "%s###%s", base, base);
+        }
+    }
+
+    // Header strip shown while viewing a past fight: label + Live button.
+    void fight_view_header(int viewed_fight, bool* go_live) {
+        if (viewed_fight <= 0) return;
+        ImGui::TextDisabled("Viewing Fight -%d", viewed_fight);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Live")) *go_live = true;
+        ImGui::Separator();
+    }
 }
 
 // Index-sort over the shared rows vector to avoid Snapshot copies — a
@@ -22,14 +43,18 @@ namespace {
 // do ~100 string copies per frame.
 void draw_support_window(const char* title, bool* open,
                          const std::vector<Snapshot>& rows,
-                         uint32_t Snapshot::*field) {
+                         uint32_t Snapshot::*field,
+                         int viewed_fight, bool* go_live) {
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(220, 180), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
     ImGuiWindowFlags lock_flags = settings().lock_windows
         ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
         : 0;
-    if (ImGui::Begin(title, open, lock_flags)) {
+    char wtitle[96];
+    fight_window_title(wtitle, sizeof(wtitle), title, viewed_fight);
+    if (ImGui::Begin(wtitle, open, lock_flags)) {
+        fight_view_header(viewed_fight, go_live);
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags sup_flags =
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
@@ -115,14 +140,19 @@ void draw_support_window(const char* title, bool* open,
     ImGui::End();
 }
 
-void draw_downs_window(bool* open, const std::vector<Snapshot>& rows) {
+void draw_downs_window(bool* open, const std::vector<Snapshot>& rows,
+                       int viewed_fight, bool* go_live) {
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(280, 200), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
     ImGuiWindowFlags lock_flags = settings().lock_windows
         ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
         : 0;
-    if (ImGui::Begin("Down contribution", open, lock_flags)) {
+    char wtitle[96];
+    fight_window_title(wtitle, sizeof(wtitle), "Down contribution",
+                       viewed_fight);
+    if (ImGui::Begin(wtitle, open, lock_flags)) {
+        fight_view_header(viewed_fight, go_live);
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
         ImGuiTableFlags f =
             ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |

@@ -22,7 +22,7 @@ namespace {
     // Single source of truth for the version string. Bump this one line
     // per release. kVersion is read at runtime (idps::version(), the
     // get_update_url semver compare); kBuild is arc's out_build display.
-    #define IDPS_VERSION "0.8.0"
+    #define IDPS_VERSION "0.8.1"
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = IDPS_VERSION;
     constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";
@@ -86,6 +86,11 @@ arcdps_exports* mod_init() {
     const auto& s = settings();
     options().exclude_npcs.store(s.exclude_npcs, std::memory_order_relaxed);
     options().exclude_gadgets.store(s.exclude_gadgets, std::memory_order_relaxed);
+    options().fight_gap_enabled.store(s.fight_gap_enabled,
+                                      std::memory_order_relaxed);
+    options().fight_gap_ms.store(
+        static_cast<uint32_t>(s.fight_gap_seconds) * 1000u,
+        std::memory_order_relaxed);
 
     g_exports.size         = sizeof(arcdps_exports);
     g_exports.sig          = kPluginSig;

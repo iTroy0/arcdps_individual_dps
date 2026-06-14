@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <windows.h>
 
 #include "settings.h"
 #include "tracker.h"
@@ -69,15 +70,41 @@ void draw_detail_window(int viewed_history_idx) {
 
     if (!s.detail_open || sel == 0) { publish_visible(); return; }
 
-    if (viewed_history_idx > 0) {
-        int hist_idx = tracker().history_size() - viewed_history_idx;
-        if (!tracker().detail_at(hist_idx, sel, g_detail)) {
-            s.detail_open = false;
-            publish_visible();
-            return;
+    // Refresh throttle: tracker().detail() deep-copies the agent's skill
+    // table under the combat mutex, which is the detail window's dominant
+    // per-frame cost. The DPS curve is sampled at 500ms cadence, so a
+    // 250ms refresh is visually lossless. Key change (agent / fight /
+    // spike skill) refreshes immediately so switching never shows stale
+    // data.
+    {
+        struct DetailCache {
+            uintptr_t agent   = 0;
+            int       fight   = -1;
+            uint32_t  spike   = 0;
+            uint64_t  last_ms = 0;
+        };
+        static DetailCache dc;
+        uint64_t now_ms = GetTickCount64();
+        bool key_changed = dc.agent != sel ||
+                           dc.fight != viewed_history_idx ||
+                           dc.spike != g_selected_skill;
+        if (key_changed || now_ms - dc.last_ms > 250) {
+            if (viewed_history_idx > 0) {
+                int hist_idx = tracker().history_size() - viewed_history_idx;
+                if (!tracker().detail_at(hist_idx, sel, g_detail,
+                                         g_selected_skill)) {
+                    s.detail_open = false;
+                    publish_visible();
+                    return;
+                }
+            } else {
+                tracker().detail(sel, g_detail, g_selected_skill);
+            }
+            dc.agent   = sel;
+            dc.fight   = viewed_history_idx;
+            dc.spike   = g_selected_skill;
+            dc.last_ms = now_ms;
         }
-    } else {
-        tracker().detail(sel, g_detail);
     }
     const auto& d = g_detail;
     if (d.name.empty()) {
@@ -86,13 +113,17 @@ void draw_detail_window(int viewed_history_idx) {
         return;
     }
 
-    char title[160];
+    char fight_tag[24] = "";
+    if (viewed_history_idx > 0)
+        std::snprintf(fight_tag, sizeof(fight_tag), " - Fight -%d",
+                      viewed_history_idx);
+    char title[176];
     if (!d.account.empty())
-        std::snprintf(title, sizeof(title), "%s (%s) - details###idps_detail",
-                      d.name.c_str(), d.account.c_str());
+        std::snprintf(title, sizeof(title), "%s (%s) - details%s###idps_detail",
+                      d.name.c_str(), d.account.c_str(), fight_tag);
     else
-        std::snprintf(title, sizeof(title), "%s - details###idps_detail",
-                      d.name.c_str());
+        std::snprintf(title, sizeof(title), "%s - details%s###idps_detail",
+                      d.name.c_str(), fight_tag);
 
     static bool   prev_rel = false;
     static ImVec2 prev_ds(0.0f, 0.0f);

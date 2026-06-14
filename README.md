@@ -22,10 +22,15 @@ load and arcdps downloads + reloads the DLL whenever a newer version exists.
   window denominator (matches arcdps `Damage (excl)`), click headers to sort
 - Per-self fight boundaries — squadmates entering / leaving combat don't reset
   your row
+- Smart fight boundaries (toggleable, gap 1-60 s, default 5) — re-entering
+  combat within the gap resumes the same fight; beyond it your row resets
+  only on your first action, so NPC aggro or stray AoE never wipes stats;
+  fights shorter than the gap skip history unless they scored a down / kill
 - Fight history — the last 5 fights are kept, newest first, each stamped
   with its end time (clock + "Xm ago"), duration, squad damage, and player
   count; browse them from the window right-click menu or a player row's
-  context menu
+  context menu — Cleanses / Strips / Downs windows label themselves with
+  the viewed fight and offer a one-click Live return
 - Colored per-player damage bars, profession icons, optional gold self-name and
   pin-self-to-top
 - Click a row → detail window: DPS-over-time graph with smoothed / cumulative /

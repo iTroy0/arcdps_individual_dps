@@ -230,6 +230,22 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
         }
     }
 
+    // Buff removal (cleanse / strip) is delivered, per the evtc spec, as a
+    // NORMAL combat event (is_statechange == CBTS_COMBAT) carrying
+    // is_buffremove != 0 — src lost the buff, dst removed it. It must be
+    // intercepted here: on_damage would drop it (buff set, no buff_dmg) and
+    // the strip/cleanse counters would barely move. Some arc builds also
+    // surface the dedicated CBTS_BUFFREMOVE_ALL/SINGLE statechanges; handle
+    // both forms in one place.
+    bool is_buff_remove =
+        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove != 0) ||
+        ev->is_statechange == CBTS_BUFFREMOVE_ALL ||
+        ev->is_statechange == CBTS_BUFFREMOVE_SINGLE;
+    if (is_buff_remove) {
+        on_buff_remove(ev, src, dst);
+        return;
+    }
+
     if (ev->is_statechange != CBTS_COMBAT) {
         on_statechange(ev, src, dst);
         return;
@@ -279,30 +295,6 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                 }
             }
             break;
-        case CBTS_BUFFREMOVE_ALL: {
-            // src=victim losing buff, dst=remover. CBTB_ALL is the single-
-            // action removal; CBTB_MANUAL etc. are per-stack synthetic
-            // expansions of the same removal and would massively over-count.
-            if (ev->is_buffremove != CBTB_ALL) break;
-            if (!dst || !dst->id) break;
-            auto it = agents_.find(dst->id);
-            if (it == agents_.end() || !it->second.is_player) break;
-            if (src) {
-                auto tt = classify_target(src);
-                if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
-                    tt == TargetType::Gadget) break;
-                if (options().exclude_npcs.load(std::memory_order_relaxed) &&
-                    tt == TargetType::Npc) break;
-            }
-            // iff is from src's (victim's) perspective: a stripped foe
-            // sees the remover as IFF_FOE; a cleansed ally sees IFF_FRIEND.
-            if (ev->iff == IFF_FOE && is_boon(ev->skillid)) {
-                it->second.strip_count++;
-            } else if (ev->iff == IFF_FRIEND && is_condition(ev->skillid)) {
-                it->second.cleanse_count++;
-            }
-            break;
-        }
         case CBTS_SQCOMBATSTART:
             // Per-self semantics: do not wipe squadmates here. Each player
             // resets via their own CBTS_ENTERCOMBAT (or implicit-enter on
@@ -334,6 +326,7 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                         s.accumulated_ms += w - *s.in_combat_wall;
                     s.in_combat_wall.reset();
                 }
+                s.fight_armed = false;
                 if (s.is_self) continue;
                 s.present = false;
                 // Clear instid alongside the instid_to_id_ wipe below so the
@@ -354,6 +347,7 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
                     if (w > *s.in_combat_wall) s.accumulated_ms += w - *s.in_combat_wall;
                     s.in_combat_wall.reset();
                 }
+                s.fight_armed = false;
             }
             any_in_combat_ = false;
             in_encounter_ = false;
@@ -366,6 +360,55 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             break;
     }
     (void)dst;
+}
+
+void Tracker::on_buff_remove(cbtevent* ev, ag* src, ag* dst) {
+    // Count one per server-authoritative removal: CBTB_ALL (last/all stacks
+    // of a buff cleared) or CBTB_SINGLE (one stack). Skip CBTB_MANUAL — arc
+    // synthesizes one per stack on an all-remove, so counting it would
+    // multiply the tally by the stack size. Both the classic
+    // (is_statechange == CBTS_COMBAT, kind in is_buffremove) and the
+    // dedicated-statechange delivery forms map onto the same two kinds.
+    bool is_all =
+        ev->is_statechange == CBTS_BUFFREMOVE_ALL ||
+        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove == CBTB_ALL);
+    bool is_single =
+        ev->is_statechange == CBTS_BUFFREMOVE_SINGLE ||
+        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove == CBTB_SINGLE);
+    if (!is_all && !is_single) return;
+
+    // src = agent that lost the buff, dst = remover (the player we credit).
+    if (!dst || !dst->id) return;
+    auto it = agents_.find(dst->id);
+    if (it == agents_.end() || !it->second.is_player) return;
+
+    if (src) {
+        auto tt = classify_target(src);
+        if (options().exclude_gadgets.load(std::memory_order_relaxed) &&
+            tt == TargetType::Gadget) return;
+        if (options().exclude_npcs.load(std::memory_order_relaxed) &&
+            tt == TargetType::Npc) return;
+    }
+
+    // iff is from src's (the buff holder's) perspective: a stripped foe
+    // sees the remover as IFF_FOE; a cleansed ally sees IFF_FRIEND. This
+    // also splits boon-vs-condition correctly — a removed boon on a friend
+    // (e.g. a boon-rip on an ally) or a condition on a foe won't be counted.
+    bool is_strip   = ev->iff == IFF_FOE    && is_boon(ev->skillid);
+    bool is_cleanse = ev->iff == IFF_FRIEND && is_condition(ev->skillid);
+    if (!is_strip && !is_cleanse) return;
+
+    auto& agent = it->second;
+    // Support actions count as fight-starting activity: a healer opening
+    // with a cleanse must reset their armed row first, or the new fight's
+    // support piles onto the previous fight's stats.
+    if (agent.fight_armed) {
+        reset_for_new_fight(agent);
+        agent.fight_armed = false;
+    }
+    if (is_strip) agent.strip_count++;
+    else          agent.cleanse_count++;
+    agent.last_activity_wall = wall_now();
 }
 
 void Tracker::enter_combat(ag* src, uint64_t time) {
@@ -388,10 +431,22 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
     if (!s) return;
 
     if (!s->in_combat_wall) {
-        // Per-self reset: squadmate combat state does not dilute this
-        // player's stats.
-        if (has_fight_state(*s)) reset_for_new_fight(*s);
-        s->in_combat_wall = wall_now();
+        uint64_t now = wall_now();
+        if (options().fight_gap_enabled.load(std::memory_order_relaxed)) {
+            // Smart boundaries: within the gap of the last action this is
+            // a combat-drop blip — resume the same fight untouched. Beyond
+            // it, arm a deferred reset: the row keeps its previous-fight
+            // stats until the first action of the new fight, so passive
+            // combat entry (NPC aggro) never wipes anything.
+            uint64_t gap = options().fight_gap_ms.load(std::memory_order_relaxed);
+            bool recent = s->last_activity_wall != 0 &&
+                          now - s->last_activity_wall <= gap;
+            if (!recent && has_fight_state(*s)) s->fight_armed = true;
+        } else {
+            // Legacy: per-self reset at combat entry.
+            if (has_fight_state(*s)) reset_for_new_fight(*s);
+        }
+        s->in_combat_wall = now;
     }
     (void)time;
 
@@ -412,6 +467,9 @@ void Tracker::exit_combat(ag* src, uint64_t time) {
         if (w > *s.in_combat_wall) s.accumulated_ms += w - *s.in_combat_wall;
         s.in_combat_wall.reset();
     }
+    // Armed but exited without acting — the "fight" never started. Disarm
+    // so the untouched stats simply remain on the row.
+    s.fight_armed = false;
     (void)time;
     any_in_combat_ = std::any_of(agents_.begin(), agents_.end(),
         [](const auto& p) { return p.second.in_combat_wall.has_value(); });
@@ -503,21 +561,49 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         (void)revision;
     }
 
-    if (delta == 0) return;
+    // A killing blow must survive the delta gate below: it frequently
+    // arrives with value <= 0 — overkill past 0 HP, a barrier-absorbed
+    // lethal hit, or the post-2026-04-14 feed's negative encodings — so
+    // gating the kill on delta > 0 dropped virtually every one (unlike
+    // downs, which the is_offcycle discovery path recovers). Let it through;
+    // the kill is credited at the end, AFTER fight-boundary management, so
+    // it lands on the correct fight and a deferred/implicit reset can't wipe
+    // it (a killing blow is commonly a player's first action after a gap —
+    // running up to finish a downed foe). Enemy players only; NPC/gadget
+    // deaths flow through CBTS_CHANGEDEAD.
+    bool is_killing_blow = ev->buff == 0 && ev->result == CBTR_KILLINGBLOW &&
+                           dst && dst->id && dst->elite != 0xFFFFFFFFu;
+
+    if (delta == 0 && !is_killing_blow) return;
 
     uint64_t now = wall_now();
-    // Implicit-enter when arc skipped CBTS_ENTERCOMBAT. Cold-start requires
-    // (a) self as literal source — pets/minions have src->self == 0 even
-    // when attributed to the master, so their OOC autos cannot restart a
-    // fight; and (b) a strike (ev->buff == 0) — condi tail ticks landing
-    // after EXITCOMBAT would otherwise look like a fresh fight. Pets/condi
-    // may still enter for their owner if the squad is already fighting.
-    if (!owner->in_combat_wall) {
+    bool     gap_enabled = options().fight_gap_enabled.load(std::memory_order_relaxed);
+    uint64_t gap_ms      = gap_enabled
+                         ? options().fight_gap_ms.load(std::memory_order_relaxed)
+                         : 5000;
+    // Deferred reset armed at ENTERCOMBAT fires on the fight's first
+    // credited damage — this is where the new fight actually begins.
+    if (owner->fight_armed) {
+        reset_for_new_fight(*owner);
+        owner->fight_armed = false;
+        if (!owner->in_combat_wall) owner->in_combat_wall = now;
+    } else if (!owner->in_combat_wall) {
+        // Implicit-enter when arc skipped CBTS_ENTERCOMBAT. Cold-start
+        // requires (a) self as literal source — pets/minions have
+        // src->self == 0 even when attributed to the master, so their OOC
+        // autos cannot restart a fight; and (b) a strike (ev->buff == 0) —
+        // condi tail ticks landing after EXITCOMBAT would otherwise look
+        // like a fresh fight. Pets/condi may still enter for their owner
+        // if the squad is already fighting.
         bool from_self = src->self != 0;
         bool is_strike = ev->buff == 0;
         bool can_start = from_self && is_strike;
         if (!can_start && !any_in_combat_) return;
-        if (has_fight_state(*owner)) reset_for_new_fight(*owner);
+        // Same resume rule as enter_combat: action within the gap of the
+        // last action continues the previous fight instead of resetting.
+        bool recent = gap_enabled && owner->last_activity_wall != 0 &&
+                      now - owner->last_activity_wall <= gap_ms;
+        if (!recent && has_fight_state(*owner)) reset_for_new_fight(*owner);
         owner->in_combat_wall = now;
         bool was_idle = !any_in_combat_;
         any_in_combat_ = true;
@@ -530,7 +616,7 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         // so old damage doesn't leak into the next pull.
         uint64_t idle = now > owner->last_damage_wall
                       ? now - owner->last_damage_wall : 0;
-        if (idle > 5000) {
+        if (idle > gap_ms) {
             reset_for_new_fight(*owner);
             owner->in_combat_wall = now;
             // Idle gap is a fight boundary for this owner. Drop their
@@ -557,30 +643,39 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         }
     }
 
-    if (owner->first_damage_wall == 0) owner->first_damage_wall = now;
-    owner->last_damage_wall = now;
-    owner->damage_total += delta;
-
-    // Defensive: any credited damage opens the history window when none is
+    // Activity + fight-window bookkeeping applies to every credited event,
+    // including a zero-damage killing blow — so the kill opens a history
+    // window and counts as fight-starting activity.
+    owner->last_activity_wall = now;
+    // Defensive: any credited event opens the history window when none is
     // open. Belt-and-suspenders for paths where an agent's combat clock
     // survived a global reset and implicit-enter is skipped.
     if (current_fight_start_wall_ == 0) current_fight_start_wall_ = now;
 
-    auto& sk = owner->skills[ev->skillid];
-    sk.damage += delta;
-    sk.hits   += 1;
-    if (ev->buff == 0) {
-        sk.strike_hits += 1;
-        if (ev->result == CBTR_STRIKE_DAMAGECRIT) sk.crits += 1;
+    // Damage + per-skill stats only for events that actually dealt HP
+    // damage. A zero-value killing blow reaches here (to credit the kill
+    // below) but must not add a phantom 0-damage skill hit.
+    if (delta > 0) {
+        if (owner->first_damage_wall == 0) owner->first_damage_wall = now;
+        owner->last_damage_wall = now;
+        owner->damage_total += delta;
+
+        auto& sk = owner->skills[ev->skillid];
+        sk.damage += delta;
+        sk.hits   += 1;
+        if (ev->buff == 0) {
+            sk.strike_hits += 1;
+            if (ev->result == CBTR_STRIKE_DAMAGECRIT) sk.crits += 1;
+        }
+        if (sk.min_hit == 0 || delta < sk.min_hit) sk.min_hit = delta;
+        if (delta > sk.max_hit)                    sk.max_hit = delta;
+        if (sk.first_hit_wall == 0) sk.first_hit_wall = now;
+        sk.last_hit_wall = now;
+        // Cap per-skill so heavy condi tickers (Burning, Bleed) can't blow
+        // memory on long fights.
+        sk.hits_history.push_back({now, delta});
+        if (sk.hits_history.size() > 1024) sk.hits_history.pop_front();
     }
-    if (sk.min_hit == 0 || delta < sk.min_hit) sk.min_hit = delta;
-    if (delta > sk.max_hit)                    sk.max_hit = delta;
-    if (sk.first_hit_wall == 0) sk.first_hit_wall = now;
-    sk.last_hit_wall = now;
-    // Cap per-skill so heavy condi tickers (Burning, Bleed) can't blow
-    // memory on long fights.
-    sk.hits_history.push_back({now, delta});
-    if (sk.hits_history.size() > 1024) sk.hits_history.pop_front();
 
     // Per-target damage attribution drains on the downing hit
     // (ev->result == CBTR_DOWNED) into damage_to_downed. arc's realtime
@@ -593,8 +688,13 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
     // classify with elite == 0xFFFFFFFFu and some go through real
     // downstate; counting them would inflate down counts. Players have
     // elite != 0xFFFFFFFF per the evtc spec.
+    // Killing blows are handled above (kill credit + cleanup) and must NOT
+    // re-enter the down state machine: the target is already gone, and a
+    // single GW2 hit can never both down and kill (downstate has its own HP
+    // pool), so there is no down for this event to discover.
     bool dst_is_player = dst && dst->id &&
-                         dst->elite != 0xFFFFFFFFu;
+                         dst->elite != 0xFFFFFFFFu &&
+                         ev->result != CBTR_KILLINGBLOW;
     if (dst_is_player) {
         // Per evtc spec (references/README_EVTC.md, CBTS_COMBAT):
         // is_offcycle == 1 means "dst was downed at the START of the
@@ -668,29 +768,35 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
             // reflects the post-event state per spec.
             downed_[dst->id] = is_down;
         }
+    }
 
-        if (ev->result == CBTR_KILLINGBLOW) {
-            // Kill credit: arc tags exactly one event per death, and its
-            // owner dealt the lethal hit (stomps surface separately and
-            // carry no damage, so they don't reach this path).
-            owner->kills_contributed += 1;
-            target_dmg_.erase(dst->id);
-            downed_.erase(dst->id);
-            last_attacker_.erase(dst->id);
-        }
+    // Kill credit, taken AFTER fight-boundary management so it lands on the
+    // current fight and can't be wiped by a deferred/implicit reset above.
+    // A killing blow is always a finish on an already-downed or gibbed
+    // target (a single GW2 hit can't both down and kill — downstate has its
+    // own HP pool), so drop the target's fight-scoped state here so a
+    // trailing cleave is not re-attributed.
+    if (is_killing_blow) {
+        owner->kills_contributed += 1;
+        target_dmg_.erase(dst->id);
+        downed_.erase(dst->id);
+        last_attacker_.erase(dst->id);
     }
 
     // Sample cumulative damage every ~500ms. deque pop_front is O(1) —
     // vector::erase(begin) was O(n) and stalled the combat thread on long
-    // fights once the cap was reached.
-    if (owner->history.empty() ||
-        now - owner->history.back().wall_ms >= 500) {
-        owner->history.push_back({now, owner->damage_total});
-        if (owner->history.size() > 4096) {
-            owner->history.pop_front();
+    // fights once the cap was reached. Skipped for a zero-damage killing
+    // blow: damage_total is unchanged, so there's nothing new to sample.
+    if (delta > 0) {
+        if (owner->history.empty() ||
+            now - owner->history.back().wall_ms >= 500) {
+            owner->history.push_back({now, owner->damage_total});
+            if (owner->history.size() > 4096) {
+                owner->history.pop_front();
+            }
+        } else {
+            owner->history.back().damage_total = owner->damage_total;
         }
-    } else {
-        owner->history.back().damage_total = owner->damage_total;
     }
     (void)dst;
 }
@@ -747,6 +853,7 @@ void Tracker::reset_fight() {
             s.downs_contributed   = 0;
             s.kills_contributed   = 0;
             s.alive               = true;
+            s.fight_armed         = false;
             s.skills.clear();
             s.history.clear();
             // Clear per-agent instid alongside instid_to_id_ so the linear
@@ -801,12 +908,15 @@ void Tracker::push_to_history() {
     fs.end_clock  = static_cast<uint64_t>(std::time(nullptr))
                   - (now_wall - end_wall) / 1000;
 
-    bool has_data = false;
+    bool has_data  = false;
+    bool any_score = false; // any down or kill — short fights that scored stay
     for (const auto& [id, s] : agents_) {
         if (!s.is_player) continue;
         if (s.damage_total == 0 && s.strip_count == 0 &&
             s.cleanse_count == 0 && s.damage_to_downed == 0 &&
             s.downs_contributed == 0 && s.kills_contributed == 0) continue;
+        if (s.downs_contributed > 0 || s.kills_contributed > 0)
+            any_score = true;
         // Clone, then drop per-skill hits_history to keep memory bounded.
         // Spike overlay won't render for past fights; everything else
         // (DPS curve, skills table, sort) still works because totals,
@@ -824,6 +934,16 @@ void Tracker::push_to_history() {
     current_fight_start_wall_ = 0;
 
     if (!has_data) return;
+
+    // Skip junk entries: a fight shorter than the gap (poked a sentry,
+    // accidental aggro) isn't worth a history slot — UNLESS someone scored
+    // a down or kill, which makes even a 4-second gank reviewable.
+    if (options().fight_gap_enabled.load(std::memory_order_relaxed)) {
+        uint64_t gap_ms = options().fight_gap_ms.load(std::memory_order_relaxed);
+        uint64_t dur    = fs.end_wall > fs.start_wall
+                        ? fs.end_wall - fs.start_wall : 0;
+        if (dur < gap_ms && !any_score) return;
+    }
 
     history_.push_back(std::move(fs));
     while (static_cast<int>(history_.size()) > kHistoryMax) {
@@ -959,7 +1079,8 @@ bool Tracker::top_skills_at(int idx, uintptr_t agent_id, int n,
     return !out.empty();
 }
 
-bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
+bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
+                        uint32_t spike_skill) const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
     const FightSnapshot& fs = history_[idx];
@@ -990,9 +1111,12 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
         sd.max_hit        = entry.max_hit;
         sd.first_hit_wall = entry.first_hit_wall;
         sd.last_hit_wall  = entry.last_hit_wall;
-        // entry.hits_history is empty by design (cleared on push_to_history)
-        sd.hits_history.assign(entry.hits_history.begin(),
-                               entry.hits_history.end());
+        // entry.hits_history is empty by design (cleared on push_to_history);
+        // the spike filter is kept for signature symmetry with detail().
+        if (skid == spike_skill && spike_skill != 0) {
+            sd.hits_history.assign(entry.hits_history.begin(),
+                                   entry.hits_history.end());
+        }
         out.skills.push_back(std::move(sd));
     }
     std::sort(out.skills.begin(), out.skills.end(),
@@ -1000,7 +1124,8 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out) const {
     return true;
 }
 
-void Tracker::detail(uintptr_t id, AgentDetail& out) const {
+void Tracker::detail(uintptr_t id, AgentDetail& out,
+                     uint32_t spike_skill) const {
     out.skills.clear();
     out.history.clear();
     out.name.clear();
@@ -1032,8 +1157,13 @@ void Tracker::detail(uintptr_t id, AgentDetail& out) const {
             sd.max_hit        = entry.max_hit;
             sd.first_hit_wall = entry.first_hit_wall;
             sd.last_hit_wall  = entry.last_hit_wall;
-            sd.hits_history.assign(entry.hits_history.begin(),
-                                   entry.hits_history.end());
+            // Only the spike-overlay skill needs its per-hit timeline;
+            // copying every skill's 1024-entry deque each frame was the
+            // detail window's dominant cost under the combat mutex.
+            if (sid == spike_skill && spike_skill != 0) {
+                sd.hits_history.assign(entry.hits_history.begin(),
+                                       entry.hits_history.end());
+            }
             out.skills.push_back(std::move(sd));
         }
     }
@@ -1069,7 +1199,11 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
         // still in combat. Matches arc's Damage panel denominator.
         uint64_t ms = 0;
         if (s.first_damage_wall != 0) {
-            uint64_t end = s.in_combat_wall ? now : s.last_damage_wall;
+            // An armed row shows the PREVIOUS fight frozen as-is: the
+            // window must not extend to "now" or the old fight's DPS
+            // would decay while the player stands in combat not acting.
+            uint64_t end = (s.in_combat_wall && !s.fight_armed)
+                         ? now : s.last_damage_wall;
             if (end > s.first_damage_wall) ms = end - s.first_damage_wall;
         }
         // 500ms floor on the denominator — first hit reads as
@@ -1081,7 +1215,9 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
             ms, s.damage_total, dps,
             s.strip_count, s.cleanse_count,
             s.damage_to_downed, s.downs_contributed, s.kills_contributed,
-            s.in_combat_wall.has_value(),
+            // Armed = old stats on display; render it as the paused row it
+            // is, not as live in-combat numbers.
+            s.in_combat_wall.has_value() && !s.fight_armed,
             s.is_self,
         });
     }
