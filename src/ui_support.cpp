@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 
 #include "icons.h"
 #include "settings.h"
@@ -36,6 +37,157 @@ namespace {
         if (ImGui::SmallButton("Live")) *go_live = true;
         ImGui::Separator();
     }
+
+    ImGuiWindowFlags window_lock_flags() {
+        return settings().lock_windows
+             ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
+             : 0;
+    }
+
+    ImGuiTableFlags support_table_flags(bool sortable) {
+        ImGuiTableFlags f =
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+            ImGuiTableFlags_Reorderable | ImGuiTableFlags_ScrollY;
+        if (sortable)                  f |= ImGuiTableFlags_Sortable;
+        if (!settings().body_borders)  f |= ImGuiTableFlags_NoBordersInBody;
+        return f;
+    }
+
+    // Opens a row and renders the two leading cells every support window
+    // shares: the profession icon and the coloured name. `frac` is the
+    // row's share of the window's top value and drives the background bar
+    // (0 draws none). Leaves the cursor in the name cell, so the caller
+    // continues with TableNextColumn for its own value columns.
+    void draw_row_head(const Snapshot& r, float frac) {
+        const auto& s = settings();
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+
+        // Text takes the base profession shade, the bar the highlight one —
+        // the same split arcdps draws with.
+        ImU32 prof_col = prof_color(r.prof);
+        ImU32 bar_base = prof_color_highlight(r.prof);
+        if (!r.in_combat) {
+            prof_col = dim_color(prof_col);
+            bar_base = dim_color(bar_base);
+        }
+
+        if (frac > 0.0f) {
+            if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
+                float bar_x0 = tbl->WorkRect.Min.x;
+                float bar_x1 = tbl->WorkRect.Max.x;
+                float row_h  = ImGui::GetTextLineHeight();
+                ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
+                ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
+                ImU32 bar_col = with_alpha(bar_base, s.bar_alpha);
+                // Background channel clips the bar to the table rect rather
+                // than to the current cell.
+                ImGui::TablePushBackgroundChannel();
+                ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
+                ImGui::TablePopBackgroundChannel();
+            }
+        }
+
+        if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
+            align_icon_to_text();
+            ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, prof_col);
+            ImGui::TextUnformatted(prof_short(r.prof));
+            ImGui::PopStyleColor();
+        }
+        {
+            char spec[32];
+            format_spec(spec, sizeof(spec), r.prof, r.elite);
+            item_tooltip(spec);
+        }
+
+        ImGui::TableNextColumn();
+        // Default text colour, matching the value column beside it, and
+        // never dimmed out of combat — the icon and the bar already carry
+        // the combat state. See the same treatment in ui.cpp.
+        bool tint_name = r.is_self && s.self_name_gold;
+        if (tint_name)
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 60, 255));
+        ImGui::TextUnformatted(r.name.c_str());
+        if (tint_name) ImGui::PopStyleColor();
+        account_tooltip(r.account);
+    }
+
+    // Ratio of `v` to `max`, clamped to [0,1]. 0 when there is nothing to
+    // scale against, which draws no bar.
+    float bar_fraction(uint64_t v, uint64_t max) {
+        if (max == 0 || v == 0) return 0.0f;
+        float f = static_cast<float>(v) / static_cast<float>(max);
+        return f > 1.0f ? 1.0f : f;
+    }
+
+    // Fill g_sort_idx with row indices ordered by `less`, honouring the
+    // self-pin setting.
+    template <typename Less>
+    void build_sort_index(const std::vector<Snapshot>& rows, Less less) {
+        g_sort_idx.resize(rows.size());
+        for (size_t i = 0; i < rows.size(); ++i) g_sort_idx[i] = i;
+        std::sort(g_sort_idx.begin(), g_sort_idx.end(), less);
+        if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
+    }
+
+    // Fold the header row's sort choice into the caller's persisted state.
+    // With the header row hidden there is nothing to click and the table
+    // still reports its DefaultSort spec, so reading it would overwrite the
+    // user's pick from the right-click menu — hence the early return.
+    void resolve_sort(int& col, bool& ascending) {
+        if (!settings().show_headers) return;
+        if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+            if (specs->SpecsCount > 0) {
+                col       = specs->Specs[0].ColumnIndex;
+                ascending = specs->Specs[0].SortDirection ==
+                            ImGuiSortDirection_Ascending;
+            }
+        }
+    }
+
+    // Right-click sort menu, the route that survives a hidden header row.
+    // labels[i] names the column at index first_col + i.
+    void sort_context_menu(const char* id, const char* const* labels,
+                           int count, int first_col,
+                           int& col, bool& ascending) {
+        if (!ImGui::BeginPopupContextWindow(id,
+                ImGuiPopupFlags_MouseButtonRight)) return;
+        // count == 0 for the windows whose order is fixed; they still want
+        // the header toggle so it is reachable from any window, not just the
+        // ones that happen to be sortable.
+        if (count > 0) {
+            ImGui::TextDisabled("Sort by");
+            for (int i = 0; i < count; ++i) {
+                int c = first_col + i;
+                if (ImGui::MenuItem(labels[i], nullptr, col == c)) {
+                    // Re-picking the active column flips direction, the same
+                    // as clicking its header twice.
+                    if (col == c) ascending = !ascending;
+                    else          { col = c; ascending = false; }
+                }
+            }
+            ImGui::Separator();
+        }
+        auto& s = settings();
+        bool hdr = s.show_headers;
+        if (ImGui::MenuItem("Column headers", nullptr, hdr))
+            s.show_headers = !hdr;
+        ImGui::EndPopup();
+    }
+
+    void setup_leading_columns() {
+        ImGui::TableSetupColumn("Prof",
+                                ImGuiTableColumnFlags_WidthFixed |
+                                ImGuiTableColumnFlags_NoSort, 22.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+    }
+
+    void table_headers() {
+        if (settings().show_headers) ImGui::TableHeadersRow();
+    }
+
 }
 
 // Index-sort over the shared rows vector to avoid Snapshot copies — a
@@ -48,37 +200,30 @@ void draw_support_window(const char* title, bool* open,
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(220, 180), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
-    ImGuiWindowFlags lock_flags = settings().lock_windows
-        ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
-        : 0;
     char wtitle[96];
     fight_window_title(wtitle, sizeof(wtitle), title, viewed_fight);
-    if (ImGui::Begin(wtitle, open, lock_flags)) {
+    if (ImGui::Begin(wtitle, open, window_lock_flags())) {
         fight_view_header(viewed_fight, go_live);
+        {
+            // Order is fixed (descending count), so no sort items — the menu
+            // exists here purely to reach the header toggle.
+            int  unused_col = 0;
+            bool unused_asc = false;
+            sort_context_menu("##sup_ctx", nullptr, 0, 0,
+                              unused_col, unused_asc);
+        }
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
-        ImGuiTableFlags sup_flags =
-            ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
-            ImGuiTableFlags_Reorderable |
-            ImGuiTableFlags_ScrollY;
-        if (!settings().body_borders) sup_flags |= ImGuiTableFlags_NoBordersInBody;
-        if (ImGui::BeginTable("tbl", 3, sup_flags)) {
-            ImGui::TableSetupColumn("Prof",  ImGuiTableColumnFlags_WidthFixed, 22.0f);
-            ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
+        if (ImGui::BeginTable("tbl", 3, support_table_flags(/*sortable=*/false))) {
+            setup_leading_columns();
             // Count column is labeled per-window via the title arg so the
             // Cleanses window reads "Cleanses" and Strips reads "Strips".
             ImGui::TableSetupColumn(title, ImGuiTableColumnFlags_WidthFixed, 64.0f);
-            ImGui::TableHeadersRow();
+            table_headers();
 
-            g_sort_idx.resize(rows.size());
-            for (size_t i = 0; i < rows.size(); ++i) g_sort_idx[i] = i;
-            std::sort(g_sort_idx.begin(), g_sort_idx.end(),
-                [&rows, field](size_t a, size_t b) {
-                    return rows[a].*field > rows[b].*field;
-                });
-            if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
+            build_sort_index(rows, [&rows, field](size_t a, size_t b) {
+                return rows[a].*field > rows[b].*field;
+            });
 
-            // Top count drives the per-row bar fraction. Computed once
-            // outside the row loop.
             uint32_t max_count = 0;
             for (size_t i : g_sort_idx) {
                 uint32_t c = rows[i].*field;
@@ -88,48 +233,7 @@ void draw_support_window(const char* title, bool* open,
             for (size_t i : g_sort_idx) {
                 const auto& r = rows[i];
                 uint32_t count = r.*field;
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-
-                ImU32 prof_col = prof_color(r.prof);
-                if (!r.in_combat) prof_col = dim_alpha(prof_col);
-
-                if (max_count > 0 && count > 0) {
-                    if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
-                        float frac = static_cast<float>(count) /
-                                     static_cast<float>(max_count);
-                        float bar_x0 = tbl->WorkRect.Min.x;
-                        float bar_x1 = tbl->WorkRect.Max.x;
-                        float row_h  = ImGui::GetTextLineHeight();
-                        ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
-                        ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
-                        ImGui::TablePushBackgroundChannel();
-                        ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
-                        ImGui::TablePopBackgroundChannel();
-                    }
-                }
-
-                if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
-                    align_icon_to_text();
-                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
-                } else {
-                    ImGui::TextUnformatted(prof_short(r.prof));
-                }
-                ImGui::TableNextColumn();
-                ImU32 col;
-                if (r.is_self && settings().self_name_gold) {
-                    col = IM_COL32(255, 200, 60, 255);
-                } else if (settings().name_white) {
-                    col = IM_COL32(255, 255, 255, 255);
-                } else {
-                    col = prof_color(r.prof);
-                }
-                if (!r.in_combat) col = dim_alpha(col);
-                ImGui::PushStyleColor(ImGuiCol_Text, col);
-                ImGui::TextUnformatted(r.name.c_str());
-                ImGui::PopStyleColor();
-                account_tooltip(r.account);
+                draw_row_head(r, bar_fraction(count, max_count));
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", count);
             }
@@ -145,26 +249,19 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows,
     if (!*open) return;
     ImGui::SetNextWindowSize(ImVec2(280, 200), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(settings().window_alpha);
-    ImGuiWindowFlags lock_flags = settings().lock_windows
-        ? (ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)
-        : 0;
     char wtitle[96];
     fight_window_title(wtitle, sizeof(wtitle), "Down contribution",
                        viewed_fight);
-    if (ImGui::Begin(wtitle, open, lock_flags)) {
+    if (ImGui::Begin(wtitle, open, window_lock_flags())) {
         fight_view_header(viewed_fight, go_live);
+        {
+            static const char* kCols[] = {"Name", "Contrib", "Downs", "Kills"};
+            sort_context_menu("##downs_ctx", kCols, 4, /*first_col=*/1,
+                              settings().downs_sort, settings().downs_sort_asc);
+        }
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 1.0f));
-        ImGuiTableFlags f =
-            ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable |
-            ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
-            ImGuiTableFlags_ScrollY;
-        if (!settings().body_borders) f |= ImGuiTableFlags_NoBordersInBody;
-        if (ImGui::BeginTable("downs", 5, f)) {
-            ImGui::TableSetupColumn("Prof",
-                                    ImGuiTableColumnFlags_WidthFixed |
-                                    ImGuiTableColumnFlags_NoSort, 22.0f);
-            ImGui::TableSetupColumn("Name",
-                                    ImGuiTableColumnFlags_WidthStretch);
+        if (ImGui::BeginTable("downs", 5, support_table_flags(/*sortable=*/true))) {
+            setup_leading_columns();
             ImGui::TableSetupColumn("Contrib",
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending |
@@ -177,41 +274,29 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows,
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     40.0f);
-            ImGui::TableHeadersRow();
+            table_headers();
 
-            int  sort_col = 2;
-            bool ascending = false;
-            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
-                if (specs->SpecsCount > 0) {
-                    sort_col  = specs->Specs[0].ColumnIndex;
-                    ascending = specs->Specs[0].SortDirection ==
-                                ImGuiSortDirection_Ascending;
+            int&  sort_col  = settings().downs_sort;
+            bool& ascending = settings().downs_sort_asc;
+            resolve_sort(sort_col, ascending);
+
+            build_sort_index(rows, [&rows, sort_col, ascending](size_t a, size_t b) {
+                const auto& ra = rows[a];
+                const auto& rb = rows[b];
+                bool less;
+                switch (sort_col) {
+                    case 1:  less = ra.name < rb.name; break;
+                    case 3:  less = ra.downs_contributed <
+                                    rb.downs_contributed; break;
+                    case 4:  less = ra.kills_contributed <
+                                    rb.kills_contributed; break;
+                    case 2:
+                    default: less = ra.damage_to_downed <
+                                    rb.damage_to_downed; break;
                 }
-            }
+                return ascending ? less : !less;
+            });
 
-            g_sort_idx.resize(rows.size());
-            for (size_t i = 0; i < rows.size(); ++i) g_sort_idx[i] = i;
-            std::sort(g_sort_idx.begin(), g_sort_idx.end(),
-                [&rows, sort_col, ascending](size_t a, size_t b) {
-                    const auto& ra = rows[a];
-                    const auto& rb = rows[b];
-                    bool less;
-                    switch (sort_col) {
-                        case 1:  less = ra.name < rb.name; break;
-                        case 3:  less = ra.downs_contributed <
-                                        rb.downs_contributed; break;
-                        case 4:  less = ra.kills_contributed <
-                                        rb.kills_contributed; break;
-                        case 2:
-                        default: less = ra.damage_to_downed <
-                                        rb.damage_to_downed; break;
-                    }
-                    return ascending ? less : !less;
-                });
-            if (settings().self_pin_top) pin_self_to_top(g_sort_idx, rows);
-
-            // Top contribution drives the per-row bar fraction. Computed
-            // once outside the row loop.
             uint64_t max_contrib = 0;
             for (size_t i : g_sort_idx) {
                 if (rows[i].damage_to_downed > max_contrib)
@@ -220,48 +305,7 @@ void draw_downs_window(bool* open, const std::vector<Snapshot>& rows,
 
             for (size_t i : g_sort_idx) {
                 const auto& r = rows[i];
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-
-                ImU32 prof_col = prof_color(r.prof);
-                if (!r.in_combat) prof_col = dim_alpha(prof_col);
-
-                if (max_contrib > 0 && r.damage_to_downed > 0) {
-                    if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
-                        float frac = static_cast<float>(r.damage_to_downed) /
-                                     static_cast<float>(max_contrib);
-                        float bar_x0 = tbl->WorkRect.Min.x;
-                        float bar_x1 = tbl->WorkRect.Max.x;
-                        float row_h  = ImGui::GetTextLineHeight();
-                        ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
-                        ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
-                        ImGui::TablePushBackgroundChannel();
-                        ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
-                        ImGui::TablePopBackgroundChannel();
-                    }
-                }
-
-                if (uint64_t tex = icon_for(r.prof, r.elite); tex != 0) {
-                    align_icon_to_text();
-                    ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
-                } else {
-                    ImGui::TextUnformatted(prof_short(r.prof));
-                }
-                ImGui::TableNextColumn();
-                ImU32 col;
-                if (r.is_self && settings().self_name_gold) {
-                    col = IM_COL32(255, 200, 60, 255);
-                } else if (settings().name_white) {
-                    col = IM_COL32(255, 255, 255, 255);
-                } else {
-                    col = prof_color(r.prof);
-                }
-                if (!r.in_combat) col = dim_alpha(col);
-                ImGui::PushStyleColor(ImGuiCol_Text, col);
-                ImGui::TextUnformatted(r.name.c_str());
-                ImGui::PopStyleColor();
-                account_tooltip(r.account);
+                draw_row_head(r, bar_fraction(r.damage_to_downed, max_contrib));
                 ImGui::TableNextColumn();
                 char buf[16];
                 format_count(buf, sizeof(buf), r.damage_to_downed);

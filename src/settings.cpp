@@ -83,7 +83,7 @@ namespace {
         else if (k == "sort_mode") {
             int mode = std::atoi(v.c_str());
             if (mode < 0) mode = 0;
-            if (mode > 3) mode = 3;
+            if (mode > 4) mode = 4;
             s.sort_mode = mode;
         }
         else if (k == "sort_reverse") s.sort_reverse = std::atoi(v.c_str()) != 0;
@@ -91,28 +91,35 @@ namespace {
         else if (k == "strips_open")   s.strips_open   = std::atoi(v.c_str()) != 0;
         else if (k == "downs_open")    s.downs_open    = std::atoi(v.c_str()) != 0;
         else if (k == "highlight_self") s.highlight_self = std::atoi(v.c_str()) != 0;
-        else if (k == "name_white")     s.name_white     = std::atoi(v.c_str()) != 0;
         else if (k == "self_name_gold") s.self_name_gold = std::atoi(v.c_str()) != 0;
         else if (k == "self_pin_top")   s.self_pin_top   = std::atoi(v.c_str()) != 0;
+        else if (k == "use_arc_colors")  s.use_arc_colors  = std::atoi(v.c_str()) != 0;
+        else if (k == "show_subgroup")   s.show_subgroup   = std::atoi(v.c_str()) != 0;
         else if (k == "responsive_columns") s.responsive_columns = std::atoi(v.c_str()) != 0;
         else if (k == "body_borders")   s.body_borders   = std::atoi(v.c_str()) != 0;
-        else if (k == "bar_full_row")   s.bar_full_row   = std::atoi(v.c_str()) != 0;
+        else if (k == "show_headers")   s.show_headers   = std::atoi(v.c_str()) != 0;
+        else if (k == "downs_sort") {
+            int c = std::atoi(v.c_str());
+            s.downs_sort = (c >= 1 && c <= 4) ? c : 2;
+        }
+        else if (k == "downs_sort_asc")   s.downs_sort_asc   = std::atoi(v.c_str()) != 0;
         else if (k == "show_totals")    s.show_totals    = std::atoi(v.c_str()) != 0;
         else if (k == "lock_windows")   s.lock_windows   = std::atoi(v.c_str()) != 0;
         else if (k == "chart_smooth")   s.chart_smooth   = std::atoi(v.c_str()) != 0;
         else if (k == "chart_cum")      s.chart_cum      = std::atoi(v.c_str()) != 0;
         else if (k == "chart_avg")      s.chart_avg      = std::atoi(v.c_str()) != 0;
         else if (k == "chart_burst")    s.chart_burst    = std::atoi(v.c_str()) != 0;
-        else if (k == "pos_relative")   s.pos_relative   = std::atoi(v.c_str()) != 0;
-        else if (k == "window_rx")      s.window_rx      = static_cast<float>(std::atof(v.c_str()));
-        else if (k == "window_ry")      s.window_ry      = static_cast<float>(std::atof(v.c_str()));
-        else if (k == "detail_rx")      s.detail_rx      = static_cast<float>(std::atof(v.c_str()));
-        else if (k == "detail_ry")      s.detail_ry      = static_cast<float>(std::atof(v.c_str()));
         else if (k == "detail_open")   s.detail_open   = std::atoi(v.c_str()) != 0;
         else if (k == "detail_x")      s.detail_x      = static_cast<float>(std::atof(v.c_str()));
         else if (k == "detail_y")      s.detail_y      = static_cast<float>(std::atof(v.c_str()));
         else if (k == "detail_w")      s.detail_w      = static_cast<float>(std::atof(v.c_str()));
         else if (k == "detail_h")      s.detail_h      = static_cast<float>(std::atof(v.c_str()));
+        else if (k == "bar_alpha") {
+            float a = static_cast<float>(std::atof(v.c_str()));
+            if (a < 0.15f) a = 0.15f;
+            if (a > 1.00f) a = 1.00f;
+            s.bar_alpha = a;
+        }
         else if (k == "window_alpha") {
             float a = static_cast<float>(std::atof(v.c_str()));
             if (a < 0.10f) a = 0.10f;
@@ -196,29 +203,28 @@ namespace {
         put("strips_open=%d\n",     s.strips_open   ? 1 : 0);
         put("downs_open=%d\n",      s.downs_open    ? 1 : 0);
         put("highlight_self=%d\n",  s.highlight_self ? 1 : 0);
-        put("name_white=%d\n",      s.name_white     ? 1 : 0);
         put("self_name_gold=%d\n",  s.self_name_gold ? 1 : 0);
         put("self_pin_top=%d\n",    s.self_pin_top   ? 1 : 0);
+        put("use_arc_colors=%d\n",  s.use_arc_colors  ? 1 : 0);
+        put("show_subgroup=%d\n",   s.show_subgroup   ? 1 : 0);
         put("responsive_columns=%d\n", s.responsive_columns ? 1 : 0);
         put("body_borders=%d\n",    s.body_borders   ? 1 : 0);
-        put("bar_full_row=%d\n",    s.bar_full_row   ? 1 : 0);
+        put("show_headers=%d\n",    s.show_headers   ? 1 : 0);
+        put("downs_sort=%d\n",      s.downs_sort);
+        put("downs_sort_asc=%d\n",  s.downs_sort_asc   ? 1 : 0);
         put("show_totals=%d\n",     s.show_totals    ? 1 : 0);
         put("lock_windows=%d\n",    s.lock_windows   ? 1 : 0);
         put("chart_smooth=%d\n",    s.chart_smooth   ? 1 : 0);
         put("chart_cum=%d\n",       s.chart_cum      ? 1 : 0);
         put("chart_avg=%d\n",       s.chart_avg      ? 1 : 0);
         put("chart_burst=%d\n",     s.chart_burst    ? 1 : 0);
-        put("pos_relative=%d\n",    s.pos_relative   ? 1 : 0);
-        put("window_rx=%.4f\n",     s.window_rx);
-        put("window_ry=%.4f\n",     s.window_ry);
-        put("detail_rx=%.4f\n",     s.detail_rx);
-        put("detail_ry=%.4f\n",     s.detail_ry);
         put("detail_open=%d\n",     s.detail_open   ? 1 : 0);
         put("detail_x=%.1f\n",      s.detail_x);
         put("detail_y=%.1f\n",      s.detail_y);
         put("detail_w=%.1f\n",      s.detail_w);
         put("detail_h=%.1f\n",      s.detail_h);
         put("window_alpha=%.2f\n",  s.window_alpha);
+        put("bar_alpha=%.2f\n",     s.bar_alpha);
         put("last_seen_version=%s\n", s.last_seen_version.c_str());
         return std::string(buf, static_cast<size_t>(off));
     }

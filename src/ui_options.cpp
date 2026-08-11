@@ -3,6 +3,7 @@
 #include <atomic>
 #include <imgui.h>
 
+#include "arc_exports.h"
 #include "exports.h"
 #include "settings.h"
 #include "tracker.h"
@@ -64,6 +65,9 @@ void draw_filters_section() {
 
 void draw_windows_section() {
     auto& s = settings();
+    bool wo = s.window_open;
+    if (ImGui::Checkbox("Damage window", &wo)) s.window_open = wo;
+
     bool cl = s.cleanses_open;
     bool st = s.strips_open;
     bool dn = s.downs_open;
@@ -77,13 +81,30 @@ void draw_windows_section() {
                  "attribution in WvW pulls.");
 }
 
+void draw_integration_section() {
+    auto& s = settings();
+
+    bool ac = s.use_arc_colors;
+    if (ImGui::Checkbox("Use arcdps profession colors", &ac)) s.use_arc_colors = ac;
+    item_tooltip("Read profession and subgroup colors straight from "
+                 "arcdps's own tables, so this overlay matches arc's "
+                 "exactly - including any recolor you apply in arc's "
+                 "options, which takes effect immediately. Off uses the "
+                 "canonical Guild Wars 2 palette built into the plugin.");
+    if (s.use_arc_colors && !arc_colors_available()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(arc palette unavailable)");
+        item_tooltip("arcdps did not expose its color tables to this "
+                     "plugin, so the built-in palette is in use. Older "
+                     "arcdps builds predate the export.");
+    }
+
+}
+
 void draw_appearance_section() {
     auto& s = settings();
     bool hs = s.highlight_self;
     if (ImGui::Checkbox("Highlight self row", &hs)) s.highlight_self = hs;
-
-    bool nw = s.name_white;
-    if (ImGui::Checkbox("White names", &nw)) s.name_white = nw;
 
     bool gold = s.self_name_gold;
     if (ImGui::Checkbox("Gold self name", &gold)) s.self_name_gold = gold;
@@ -95,21 +116,32 @@ void draw_appearance_section() {
     item_tooltip("Keep your own row at the top of every player table "
                  "regardless of the active sort order.");
 
+    bool hdr = s.show_headers;
+    if (ImGui::Checkbox("Column headers", &hdr)) s.show_headers = hdr;
+    item_tooltip("Show the header row naming each column, on the overlay "
+                 "tables. Hiding it buys back a row of height for a compact "
+                 "overlay, but the header is also where click-to-sort, "
+                 "drag-to-resize and the per-column hide menu live - with it "
+                 "hidden, sorting moves to each window's right-click menu "
+                 "and columns keep their current widths. The detail window "
+                 "always keeps its headers.");
+
     bool bb = s.body_borders;
     if (ImGui::Checkbox("Column dividers in body", &bb)) s.body_borders = bb;
     item_tooltip("Show thin vertical lines between columns in the table "
                  "body. Header dividers stay visible either way so "
                  "columns remain resizable.");
 
-    bool fb = s.bar_full_row;
-    if (ImGui::Checkbox("Full-row damage bar", &fb)) s.bar_full_row = fb;
-    item_tooltip("When on, the per-player damage bar fills the entire "
-                 "row width. Off restricts it to the Name column.");
-
     bool tot = s.show_totals;
     if (ImGui::Checkbox("Squad totals line", &tot)) s.show_totals = tot;
     item_tooltip("Show combined squad damage, summed DPS, and player "
                  "count above the table.");
+
+    bool sg = s.show_subgroup;
+    if (ImGui::Checkbox("Subgroup column", &sg)) s.show_subgroup = sg;
+    item_tooltip("Show each player's squad subgroup, colored to match. "
+                 "Subgroups arrive with arcdps's squad tracking, so the "
+                 "column reads blank outside a squad.");
 
     float alpha = s.window_alpha;
     ImGui::SetNextItemWidth(120.0f);
@@ -118,6 +150,22 @@ void draw_appearance_section() {
         if (alpha > 1.00f) alpha = 1.00f;
         s.window_alpha = alpha;
     }
+    item_tooltip("Opacity of the window background only. Text and icons "
+                 "stay fully opaque at any setting.");
+
+    float balpha = s.bar_alpha;
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::SliderFloat("Damage bar opacity", &balpha, 0.15f, 1.00f, "%.2f")) {
+        if (balpha < 0.15f) balpha = 0.15f;
+        if (balpha > 1.00f) balpha = 1.00f;
+        s.bar_alpha = balpha;
+    }
+    item_tooltip("Opacity of the per-player damage bar. The bar is the "
+                 "largest profession-colored surface on screen, so a low "
+                 "value lets the game world through and the profession "
+                 "color reads as washed out. Raise it for solid, saturated "
+                 "bars; lower it to see more of the world behind the "
+                 "overlay.");
 }
 
 void draw_layout_section() {
@@ -127,13 +175,6 @@ void draw_layout_section() {
     item_tooltip("Auto-hide low-priority columns (%, Combat, Damage, DPS in "
                  "that order) as the window narrows. Off hands column "
                  "management to the table header right-click menu.");
-
-    bool pr = s.pos_relative;
-    if (ImGui::Checkbox("Screen-relative position", &pr)) s.pos_relative = pr;
-    item_tooltip("Store window position as a fraction of the game "
-                 "viewport instead of absolute pixels, so the window "
-                 "stays in roughly the same on-screen spot after "
-                 "resolution changes or monitor swaps.");
 
     bool lk = s.lock_windows;
     if (ImGui::Checkbox("Lock windows (anchor)", &lk)) s.lock_windows = lk;
@@ -154,20 +195,23 @@ void reset_to_defaults() {
     s.sort_mode          = def.sort_mode;
     s.sort_reverse       = def.sort_reverse;
     s.highlight_self     = def.highlight_self;
-    s.name_white         = def.name_white;
     s.self_name_gold     = def.self_name_gold;
     s.self_pin_top       = def.self_pin_top;
     s.responsive_columns = def.responsive_columns;
     s.body_borders       = def.body_borders;
-    s.bar_full_row       = def.bar_full_row;
+    s.show_headers       = def.show_headers;
+    s.downs_sort         = def.downs_sort;
+    s.downs_sort_asc     = def.downs_sort_asc;
     s.show_totals        = def.show_totals;
+    s.show_subgroup      = def.show_subgroup;
+    s.use_arc_colors     = def.use_arc_colors;
     s.lock_windows       = def.lock_windows;
     s.chart_smooth       = def.chart_smooth;
     s.chart_cum          = def.chart_cum;
     s.chart_avg          = def.chart_avg;
     s.chart_burst        = def.chart_burst;
     s.window_alpha       = def.window_alpha;
-    s.pos_relative       = def.pos_relative;
+    s.bar_alpha          = def.bar_alpha;
     options().exclude_npcs.store   (def.exclude_npcs,
                                     std::memory_order_relaxed);
     options().exclude_gadgets.store(def.exclude_gadgets,
@@ -181,34 +225,50 @@ void reset_to_defaults() {
 
 void draw_settings_sections(bool default_open) {
     int flags = default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0;
+    // Windows first: opening a panel is the most common reason to come here.
+    if (ImGui::CollapsingHeader("Windows##idps", flags)) {
+        draw_windows_section();
+    }
     if (ImGui::CollapsingHeader("Appearance##idps", flags)) {
         draw_appearance_section();
-    }
-    if (ImGui::CollapsingHeader("Filters##idps", flags)) {
-        draw_filters_section();
     }
     if (ImGui::CollapsingHeader("Layout##idps", flags)) {
         draw_layout_section();
     }
-    if (ImGui::CollapsingHeader("Windows##idps", flags)) {
-        draw_windows_section();
+    if (ImGui::CollapsingHeader("Filters##idps", flags)) {
+        draw_filters_section();
+    }
+    if (ImGui::CollapsingHeader("arcdps integration##idps", flags)) {
+        draw_integration_section();
     }
 }
 
 } // namespace
 
 void draw_popup_settings() {
-    draw_settings_sections(/*default_open=*/true);
+    draw_settings_sections(/*default_open=*/false);
+}
+
+uintptr_t mod_options_windows(const char* windowname) {
+    // arcdps passes each of its own window names in turn, then a null to
+    // let extensions append theirs. Only the null pass is ours.
+    if (windowname) return 0;
+    auto& s = settings();
+    bool wo = s.window_open;
+    bool cl = s.cleanses_open;
+    bool st = s.strips_open;
+    bool dn = s.downs_open;
+    if (ImGui::Checkbox("Individual DPS",     &wo)) s.window_open   = wo;
+    if (ImGui::Checkbox("IDPS Cleanses",      &cl)) s.cleanses_open = cl;
+    if (ImGui::Checkbox("IDPS Strips",        &st)) s.strips_open   = st;
+    if (ImGui::Checkbox("IDPS Downs",         &dn)) s.downs_open    = dn;
+    return 0;
 }
 
 uintptr_t mod_options_end() {
     if (ImGui::CollapsingHeader("Individual DPS")) {
-        auto& s = settings();
-        ImGui::Text("v%s", version());
+        ImGui::TextDisabled("v%s", version());
         ImGui::Separator();
-
-        bool open = s.window_open;
-        if (ImGui::Checkbox("Show window", &open)) s.window_open = open;
 
         draw_settings_sections(/*default_open=*/false);
 

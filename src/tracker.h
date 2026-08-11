@@ -48,6 +48,11 @@ struct AgentState {
     uint32_t              prof            = 0;
     uint32_t              elite           = 0;
     uint16_t              instid          = 0;
+    // Squad subgroup (1..15), 0 = unknown. arc delivers it as dst->team on a
+    // player tracking-add and as dst_agent on CBTS_ENTERCOMBAT / EXITCOMBAT.
+    uint16_t              subgroup        = 0;
+    // World/team id. src->team on tracking-add, refreshed by CBTS_TEAMCHANGE.
+    uint16_t              team            = 0;
     bool                  is_self         = false;
     bool                  is_player       = false;
     bool                  present         = true;
@@ -87,6 +92,13 @@ struct AgentState {
     uint32_t              downs_contributed  = 0;
     // Killing blows landed on enemy players (CBTR_KILLINGBLOW).
     uint32_t              kills_contributed  = 0;
+    // CBTR_INTERRUPT: this agent's skill interrupted the target's action.
+    uint32_t              interrupts         = 0;
+    // CBTR_CROWDCONTROL, whose `value` is the applied disable in ms. Both
+    // the event count and the summed duration are kept — a single long
+    // stun and five short dazes are very different contributions.
+    uint32_t              cc_count           = 0;
+    uint64_t              cc_duration_ms     = 0;
 
     // deque so FIFO cap is O(1) — vector::erase(begin()) would shift 4095
     // entries on every sample once full.
@@ -111,26 +123,40 @@ struct SkillDetail {
 struct AgentDetail {
     std::string              name;
     std::string              account;
-    uint32_t                 prof;
-    uint32_t                 elite;
+    uint32_t                 prof     = 0;
+    uint32_t                 elite    = 0;
+    uint16_t                 subgroup = 0;
     std::vector<DamagePoint> history;
-    uint64_t                 history_start_wall;
+    uint64_t                 history_start_wall = 0;
     std::vector<SkillDetail> skills;
 };
 
-// Stored in Tracker::history_ when a fight closes (SQCOMBATEND or manual
-// reset). Keeps full agent state minus per-skill hits_history (cleared
-// before push) — the per-hit timeline is the only structure that grows
-// unbounded, so dropping it keeps each past fight under ~1 MB. Spike
-// overlay on the detail graph will be empty for past fights; everything
-// else (DPS curve, skills table totals, sort, support windows) works.
+// Stored in Tracker::history_ when a fight closes (idle auto-close,
+// SQCOMBATEND, map change, or manual reset). Keeps full agent state minus
+// per-skill hits_history, which is cleared before the push — that per-hit
+// timeline is the only structure that grows without a useful bound.
+//
+// What remains still scales with squad size: the per-agent DamagePoint
+// deque is capped at 4096 entries of 16 bytes, so roughly 64 KB per agent
+// plus its skill table. A 50-player squad is therefore on the order of
+// 3-4 MB per stored fight, and ~15-20 MB across all kHistoryMax slots.
+//
+// Because hits_history is gone, the detail graph's per-skill spike overlay
+// cannot render for a past fight — the UI disables that control while
+// viewing history rather than leaving a dead one on screen. Everything else
+// (DPS curve, skills table totals, sort, support windows) works.
 struct FightSnapshot {
     uint64_t                                  start_wall = 0;
     uint64_t                                  end_wall   = 0;
     // Unix seconds captured at fight close. start/end_wall are
     // GetTickCount64 ms (monotonic since boot) and cannot be mapped to
     // clock time after the fact, so the close moment is stamped here.
+    // Preferred source is arc's own CBTS_SQCOMBATEND timestamp; where that
+    // never fires (WvW) it is derived from the last credited hit.
     uint64_t                                  end_clock  = 0;
+    // Boss species id from CBTS_LOGNPCUPDATE, 0 when the fight had no
+    // log target (open world, WvW). Resolved to a name for display.
+    uint32_t                                  boss_species = 0;
     std::unordered_map<uintptr_t, AgentState> agents;
 };
 
@@ -142,25 +168,36 @@ struct FightSummary {
     uint64_t end_clock    = 0; // unix seconds; 0 = unknown
     uint64_t total_damage = 0;
     int      players      = 0;
+    // Encounter name from the fight's boss species id, empty when the
+    // fight had no log target or the species isn't in the known table.
+    const char* boss_name = nullptr;
 };
 
 struct Snapshot {
-    uintptr_t   id;
+    uintptr_t   id                = 0;
     std::string name;
     std::string account;
-    uint32_t    prof;
-    uint32_t    elite;
-    uint64_t    combat_ms;
-    uint64_t    damage_total;
-    uint64_t    dps;
-    uint32_t    strip_count;
-    uint32_t    cleanse_count;
-    uint64_t    damage_to_downed;
-    uint32_t    downs_contributed;
-    uint32_t    kills_contributed;
-    bool        in_combat;
-    bool        is_self;
+    uint32_t    prof              = 0;
+    uint32_t    elite             = 0;
+    uint16_t    subgroup          = 0;
+    uint64_t    combat_ms         = 0;
+    uint64_t    damage_total      = 0;
+    uint64_t    dps               = 0;
+    uint32_t    strip_count       = 0;
+    uint32_t    cleanse_count     = 0;
+    uint64_t    damage_to_downed  = 0;
+    uint32_t    downs_contributed = 0;
+    uint32_t    kills_contributed = 0;
+    uint32_t    interrupts        = 0;
+    uint32_t    cc_count          = 0;
+    uint64_t    cc_duration_ms    = 0;
+    bool        in_combat         = false;
+    bool        is_self           = false;
 };
+
+// Encounter name for a CBTS_LOGNPCUPDATE species id, or nullptr when the
+// id isn't one of the documented log targets.
+const char* boss_name_for(uint32_t species_id);
 
 class Tracker {
 public:
@@ -176,24 +213,41 @@ public:
     void detail(uintptr_t id, AgentDetail& out, uint32_t spike_skill = 0) const;
     void reset_fight();
 
-    // Past-fight history (B+C design). Index 0 = oldest stored fight,
-    // history_size()-1 = most recent past fight. Negative indices are
-    // not used; the UI translates "Fight -1, -2..." into these forward
-    // indices. See FightSnapshot for memory caveats.
-    int  history_size() const;
-    bool snapshot_at(int idx, std::vector<Snapshot>& out) const;
-    bool detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
-                   uint32_t spike_skill = 0) const;
-    bool fight_summary_at(int idx, FightSummary& out) const;
+    // Called from the render thread every frame or so. Closes a fight that
+    // has gone quiet: arcdps only signals a fight boundary in instanced
+    // content (CBTS_SQCOMBATEND), so in WvW nothing would ever end a fight
+    // and the whole session accumulated into one history entry. Combat
+    // events stop arriving once combat ends, so the tracker cannot notice
+    // the gap on its own — it has to be driven from outside.
+    void tick();
+
+    // Past-fight history.
+    //
+    // Fights are addressed by their start_wall, never by position. An index
+    // into the FIFO is only valid until the next push: at the cap, a push
+    // pops the front and every index shifts by one. The UI reads the size
+    // and the data in separate locked calls, so a push landing between them
+    // would have silently renamed the fight being displayed. start_wall is
+    // assigned once at fight open and never reused, so it stays correct.
+    //
+    // See FightSnapshot for memory caveats.
+    //
+    // Newest first: index 0 is the most recent past fight.
+    void fight_summaries(std::vector<FightSummary>& out) const;
+
+    bool snapshot_for(uint64_t start_wall, std::vector<Snapshot>& out) const;
+    bool detail_for(uint64_t start_wall, uintptr_t agent_id, AgentDetail& out,
+                    uint32_t spike_skill = 0) const;
     // Single-agent past-fight readout for the per-row "fight history"
-    // context menu. Cheaper than calling snapshot_at + scanning.
-    bool agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) const;
+    // context menu. Cheaper than snapshot_for + scanning.
+    bool agent_snapshot_for(uint64_t start_wall, uintptr_t agent_id,
+                            Snapshot& out) const;
     // Top-N skills by damage. Cheap (no DamagePoint history copy) so safe
     // to call every frame from a hover tooltip.
     bool top_skills(uintptr_t agent_id, int n,
                     std::vector<SkillDetail>& out) const;
-    bool top_skills_at(int idx, uintptr_t agent_id, int n,
-                       std::vector<SkillDetail>& out) const;
+    bool top_skills_for(uint64_t start_wall, uintptr_t agent_id, int n,
+                        std::vector<SkillDetail>& out) const;
 
 private:
     void on_statechange(cbtevent* ev, ag* src, ag* dst);
@@ -201,9 +255,13 @@ private:
     void on_damage(cbtevent* ev, ag* src, ag* dst,
                    const char* skillname, uint64_t revision);
 
-    void enter_combat(ag* src, uint64_t time);
-    void exit_combat(ag* src, uint64_t time);
-    void force_exit(ag* src, uint64_t time);
+    // CBTS_ENTERCOMBAT / EXITCOMBAT carry the agent's prof, elite spec and
+    // subgroup in the event body (value / buff_dmg / dst_agent), which the
+    // `ag` struct does not populate for state changes. Both take the event
+    // so that identity can be refreshed on every combat transition.
+    void enter_combat(cbtevent* ev, ag* src);
+    void exit_combat(cbtevent* ev, ag* src);
+    void force_exit(ag* src);
 
     AgentState* touch_agent(ag* src);
     AgentState* find_by_instid(uint16_t instid);
@@ -235,8 +293,8 @@ private:
 
     // FIFO of past fights, capped at kHistoryMax. push_to_history()
     // clones the current agents_ (clearing per-skill hits_history to
-    // bound memory) and appends. Read by the UI via snapshot_at /
-    // detail_at when the user navigates Fight -1, -2, ... in the main
+    // bound memory) and appends. Read by the UI via snapshot_for /
+    // detail_for when the user navigates Fight -1, -2, ... in the main
     // Damage window header.
     static constexpr int                            kHistoryMax = 5;
     std::deque<FightSnapshot>                       history_;
@@ -245,8 +303,17 @@ private:
     // after push_to_history() runs so the next entry-into-combat
     // captures a fresh start.
     uint64_t                                        current_fight_start_wall_ = 0;
+    // Boss species id for the fight in progress, from CBTS_LOGNPCUPDATE.
+    uint32_t                                        current_boss_species_     = 0;
+    // Unix seconds for the current fight's close, taken from arc's own
+    // CBTS_SQCOMBATEND payload (buff_dmg = local unix timestamp). 0 means
+    // arc never sent one — WvW, or a manual reset — and push_to_history
+    // derives the stamp from the last credited hit instead.
+    uint64_t                                        sq_end_clock_             = 0;
 
     void push_to_history();
+    // Locate a stored fight by its start_wall. Caller holds mutex_.
+    const FightSnapshot* find_fight(uint64_t start_wall) const;
 };
 
 Tracker& tracker();

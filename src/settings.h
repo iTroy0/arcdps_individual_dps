@@ -17,7 +17,7 @@ struct Settings {
     float window_y        = -1.0f;
     float window_w        = 380.0f;
     float window_h        = 260.0f;
-    int   sort_mode       = 0; // 0=damage 1=dps 2=name 3=combat
+    int   sort_mode       = 0; // 0=damage 1=dps 2=name 3=combat 4=subgroup
     bool  sort_reverse    = false;
 
     bool  cleanses_open   = false;
@@ -25,16 +25,44 @@ struct Settings {
     bool  downs_open      = false;
 
     bool  highlight_self  = true;
-    bool  name_white      = true;
     bool  self_name_gold  = false;
     bool  self_pin_top    = true;
+
+    // Source profession / subgroup colours from arcdps's own tables (its e5
+    // export) so both overlays agree exactly, and follow along when the user
+    // recolours a profession in arc's options. Off falls back to the
+    // canonical GW2 palette compiled into the plugin.
+    bool  use_arc_colors  = true;
+
+    // Subgroup column in the Damage table, coloured per subgroup.
+    bool  show_subgroup   = false;
 
     // Auto-hides low-priority columns as the Damage window narrows: drops
     // %, Combat, Damage, then DPS. Prof + Name always stay visible.
     bool  responsive_columns = true;
 
     bool  body_borders    = false;
-    bool  bar_full_row    = true;
+
+    // Opacity of the per-player damage bar, independent of window_alpha.
+    // The bar is the largest profession-coloured surface on screen, and it
+    // sits over a translucent window over the game world — at low values the
+    // terrain dominates and the profession colour reads as washed out.
+    // Clamped to [0.15, 1.0] on load.
+    float bar_alpha       = 0.70f;
+
+    // Column header row on every table. Off is a compact, chrome-free
+    // overlay — at the cost of the interactions that live in that row:
+    // click-to-sort, drag-to-resize, and the per-column hide menu. Sorting
+    // is reachable from each window's right-click menu either way, which is
+    // why the sort choices below are persisted rather than read back out of
+    // the header.
+    bool  show_headers    = true;
+
+    // Sort state for the Downs window: column index into its table, and
+    // direction. Kept in sync with the header row while it is visible, and
+    // the only source of truth once it is hidden.
+    int   downs_sort      = 2; // Contrib
+    bool  downs_sort_asc  = false;
 
     // Squad totals line (Σ damage / Σ DPS / player count) above the table.
     bool  show_totals     = true;
@@ -52,15 +80,6 @@ struct Settings {
 
     // Clamped to [0.10, 1.0] on load.
     float window_alpha    = 0.95f;
-
-    // When enabled, absolute window_x/y are recomputed from rx/ry against
-    // the current viewport on first window appearance — survives resolution
-    // changes / monitor swaps.
-    bool  pos_relative    = false;
-    float window_rx       = -1.0f;
-    float window_ry       = -1.0f;
-    float detail_rx       = -1.0f;
-    float detail_ry       = -1.0f;
 
     bool  detail_open     = false;
     float detail_x        = -1.0f;

@@ -4,6 +4,7 @@
 #include <string>
 #include <windows.h>
 
+#include "arc_exports.h"
 #include "arcdps_api.h"
 #include "combat.h"
 #include "icons.h"
@@ -12,6 +13,7 @@
 #include "tracker.h"
 #include "ui.h"
 #include "ui_detail.h"
+#include "ui_options.h"
 #include "update.h"
 
 namespace idps {
@@ -22,7 +24,7 @@ namespace {
     // Single source of truth for the version string. Bump this one line
     // per release. kVersion is read at runtime (idps::version(), the
     // get_update_url semver compare); kBuild is arc's out_build display.
-    #define IDPS_VERSION "0.8.1"
+    #define IDPS_VERSION "0.9.0"
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = IDPS_VERSION;
     constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";
@@ -44,7 +46,10 @@ namespace {
         // toggle the detail-close request 30+ times a second.
         if (msg == WM_KEYDOWN && wparam == VK_ESCAPE &&
             !(lparam & 0x40000000)) {
-            if (consume_esc_for_detail()) return 0;
+            // Only when the user actually wants ESC to close windows —
+            // arcdps exposes that preference in its UI-settings mask, and
+            // swallowing ESC against their wish would break the game menu.
+            if (arc_ui_close_with_esc() && consume_esc_for_detail()) return 0;
         }
         return msg;
     }
@@ -106,7 +111,9 @@ arcdps_exports* mod_init() {
     g_exports.combat_local    = nullptr;
     g_exports.wnd_nofilter    = reinterpret_cast<void*>(&mod_wnd_nofilter);
     g_exports.wnd_filter      = nullptr;
-    g_exports.options_windows = nullptr;
+    // Contributes this plugin's windows to arcdps's own window list, so
+    // they can be toggled from the same place as arc's.
+    g_exports.options_windows = reinterpret_cast<void*>(&mod_options_windows);
     return &g_exports;
 }
 

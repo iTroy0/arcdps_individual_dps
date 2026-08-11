@@ -57,6 +57,7 @@ target_include_directories(imgui_static PUBLIC ${_imgui_src})
 
 add_library(arcdps_individual_dps SHARED
     src/main.cpp
+    src/arc_exports.cpp
     src/exports.cpp
     src/combat.cpp
     src/tracker.cpp

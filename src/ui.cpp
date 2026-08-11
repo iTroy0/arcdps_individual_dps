@@ -76,51 +76,72 @@ void ui_init(ImGuiContext* ctx) {
     if (ctx) ImGui::SetCurrentContext(ctx);
 }
 
-uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_or_ooc*/) {
+// hide_if_combat_or_ooc reports arcdps's combat / out-of-combat auto-hide
+// state, and arc's global hide toggle is readable via its e6 export. Neither
+// is acted on: this plugin's windows are governed solely by its own toggles.
+// Following arc would hide the meter exactly when it is most useful — arc's
+// out-of-combat auto-hide fires right as you sit down to read the fight you
+// just finished.
+uintptr_t mod_imgui(uint32_t not_charsel_or_loading,
+                    uint32_t /*hide_if_combat_or_ooc*/) {
     if (!not_charsel_or_loading) return 0;
     icons_ensure_loaded();
     auto& s = settings();
+
+    // Close a fight that has gone quiet, so WvW builds history at all rather
+    // than accumulating the whole session into one entry. Deliberately ahead
+    // of the window_open check: history has to keep advancing while the
+    // overlay is hidden, or reopening it would show one entry spanning
+    // everything since it was closed. Throttled — the check takes the combat
+    // mutex and nothing it looks at moves faster than the fight gap.
+    {
+        static uint64_t last_tick = 0;
+        uint64_t now_ms = GetTickCount64();
+        if (now_ms - last_tick >= 250) {
+            last_tick = now_ms;
+            tracker().tick();
+        }
+    }
+
     if (!s.window_open) return 0;
 
-    static bool   prev_rel = false;
-    static ImVec2 prev_ds(0.0f, 0.0f);
-    apply_window_pos(s.window_x, s.window_y, s.window_rx, s.window_ry,
-                     s.pos_relative, prev_rel, prev_ds);
+    apply_window_pos(s.window_x, s.window_y);
     ImGui::SetNextWindowSize(ImVec2(s.window_w, s.window_h),
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
 
-    // Fight-history navigation. viewed_fight 0 = live current fight,
-    // 1 = most recent past fight, 2 = older, etc. Anchored to the
-    // selected FightSnapshot by start_wall, not by relative index, so a
-    // new fight closing mid-view doesn't silently shift the user onto a
-    // different fight. If the anchored fight falls off the FIFO, snap
-    // back to live.
-    int hist_n = tracker().history_size();
-    static int      viewed_fight      = 0;
+    // Fight-history navigation. viewed_start_wall is the source of truth —
+    // it names one specific stored fight for as long as that fight exists.
+    // viewed_fight is only the display ordinal (1 = most recent past fight)
+    // derived from it each frame, so a fight closing mid-view renumbers the
+    // label without moving the user onto different data. 0 = live.
+    //
+    // Every read below works off this one summaries vector, fetched under a
+    // single lock. Reading a count and then indexing in a separate call let
+    // a push land in between and shift the FIFO under us.
+    static std::vector<FightSummary> hist;
+    tracker().fight_summaries(hist);            // newest first
+    int hist_n = static_cast<int>(hist.size());
+
     static uint64_t viewed_start_wall = 0;
-    if (viewed_fight > 0 && viewed_start_wall != 0) {
-        int relocated = 0;
-        for (int back = 1; back <= hist_n; ++back) {
-            FightSummary fsum;
-            if (tracker().fight_summary_at(hist_n - back, fsum) &&
-                fsum.start_wall == viewed_start_wall) {
-                relocated = back;
+    int viewed_fight = 0;
+    if (viewed_start_wall != 0) {
+        for (int i = 0; i < hist_n; ++i) {
+            if (hist[i].start_wall == viewed_start_wall) {
+                viewed_fight = i + 1;
                 break;
             }
         }
-        viewed_fight = relocated;
+        // Fell off the end of the FIFO — snap back to live.
         if (viewed_fight == 0) viewed_start_wall = 0;
     }
-    if (viewed_fight > hist_n) viewed_fight = hist_n;
-    if (viewed_fight < 0)      viewed_fight = 0;
 
     bool viewing_history = viewed_fight > 0;
     if (viewing_history) {
-        int storage_idx = hist_n - viewed_fight;
-        if (!tracker().snapshot_at(storage_idx, g_rows)) {
-            viewed_fight = 0;
-            viewing_history = false;
+        if (!tracker().snapshot_for(viewed_start_wall, g_rows)) {
+            viewed_start_wall = 0;
+            viewed_fight      = 0;
+            viewing_history   = false;
             tracker().snapshot(g_rows);
         }
     } else {
@@ -144,8 +165,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     if (ImGui::Begin("Damage", &open, lock_flags)) {
         ImVec2 pos  = ImGui::GetWindowPos();
         ImVec2 size = ImGui::GetWindowSize();
-        capture_window_pos(pos, s.window_x, s.window_y,
-                           s.window_rx, s.window_ry);
+        capture_window_pos(pos, s.window_x, s.window_y);
         s.window_w = size.x;
         s.window_h = size.y;
 
@@ -197,38 +217,68 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 ImGui::SetClipboardText(out.c_str());
                 ImGui::CloseCurrentPopup();
             }
+            // Sort control. Clicking a column header is the usual route,
+            // but that row is optional — this menu is the path that keeps
+            // working with headers hidden, and it drives the same persisted
+            // sort_mode / sort_reverse the header writes to.
+            ImGui::Separator();
+            ImGui::TextDisabled("Sort by");
+            {
+                struct SortChoice { const char* label; int mode; };
+                static constexpr SortChoice kSorts[] = {
+                    {"Damage",   0},
+                    {"DPS",      1},
+                    {"Name",     2},
+                    {"Time",     3},
+                    {"Subgroup", 4},
+                };
+                for (const auto& c : kSorts) {
+                    if (ImGui::MenuItem(c.label, nullptr, s.sort_mode == c.mode)) {
+                        // Re-picking the active column flips direction, the
+                        // same as clicking its header twice.
+                        if (s.sort_mode == c.mode) s.sort_reverse = !s.sort_reverse;
+                        else                       s.sort_mode    = c.mode;
+                    }
+                }
+                bool rev = s.sort_reverse;
+                if (ImGui::MenuItem("Reverse order", nullptr, rev))
+                    s.sort_reverse = !rev;
+            }
+
             // Fight history is reachable here too — the per-row menu
             // needs a row to right-click, which an empty table doesn't
             // have. Newest first (back = 1 is the most recent).
             ImGui::Separator();
             ImGui::TextDisabled("Fight history");
-            if (viewed_fight != 0) {
-                if (ImGui::MenuItem("Current (live)")) {
-                    viewed_fight      = 0;
-                    viewed_start_wall = 0;
-                    ImGui::CloseCurrentPopup();
-                }
+            // Current first, then newest past fight downwards. Current is
+            // always listed, checked when active, so the menu always shows
+            // where you are rather than starting at -1 with no anchor.
+            if (ImGui::MenuItem("Current (live)", nullptr, viewed_fight == 0)) {
+                viewed_start_wall = 0;
+                ImGui::CloseCurrentPopup();
             }
             if (hist_n == 0) {
                 ImGui::TextDisabled("(no past fights yet)");
             }
-            for (int back = 1; back <= hist_n; ++back) {
-                FightSummary fsum;
-                if (!tracker().fight_summary_at(hist_n - back, fsum))
-                    continue;
+            // hist is newest-first, so index 0 is "-1".
+            for (int i = 0; i < hist_n; ++i) {
+                const FightSummary& fsum = hist[i];
+                int back = i + 1;
                 uint64_t dur = fsum.end_wall > fsum.start_wall
                              ? fsum.end_wall - fsum.start_wall : 0;
-                char dbuf[32], cbuf[16], dmgbuf[16], label[128];
+                char dbuf[32], cbuf[16], dmgbuf[16], label[192];
                 format_time (dbuf, sizeof(dbuf), dur);
                 format_clock(cbuf, sizeof(cbuf), fsum.end_clock);
                 format_count(dmgbuf, sizeof(dmgbuf), fsum.total_damage);
+                // Encounter name when arc logged a boss for this fight;
+                // WvW and open-world pulls simply have none.
                 snprintf(label, sizeof(label),
-                         "-%d  %s  (%s)   %s dmg   %d players",
+                         "-%d  %s  (%s)   %s dmg   %d players%s%s",
                          back, cbuf[0] ? cbuf : "--:--", dbuf,
-                         dmgbuf, fsum.players);
-                bool selected = (viewed_fight == back);
-                if (ImGui::MenuItem(label, nullptr, selected)) {
-                    viewed_fight      = back;
+                         dmgbuf, fsum.players,
+                         fsum.boss_name ? "   - " : "",
+                         fsum.boss_name ? fsum.boss_name : "");
+                if (ImGui::MenuItem(label, nullptr, viewed_fight == back)) {
                     viewed_start_wall = fsum.start_wall;
                     ImGui::CloseCurrentPopup();
                 }
@@ -270,9 +320,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
         // view stays uncluttered. Nav happens via right-click on a row -> Fight
         // history menu; no arrows.
         if (viewing_history) {
-            FightSummary fsum;
-            int storage_idx = hist_n - viewed_fight;
-            tracker().fight_summary_at(storage_idx, fsum);
+            const FightSummary& fsum = hist[viewed_fight - 1];
             uint64_t dur_ms = fsum.end_wall > fsum.start_wall
                             ? fsum.end_wall - fsum.start_wall : 0;
             char dbuf[32], cbuf[16], agobuf[24];
@@ -285,11 +333,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             } else {
                 ImGui::Text("Viewing Fight -%d  (%s)", viewed_fight, dbuf);
             }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Live")) {
-                viewed_fight      = 0;
-                viewed_start_wall = 0;
+            if (fsum.boss_name) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.50f, 1.0f),
+                                   "- %s", fsum.boss_name);
             }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Live")) viewed_start_wall = 0;
             ImGui::Separator();
         }
 
@@ -316,7 +366,11 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
             ImGuiTableFlags_ScrollY;
         if (!s.body_borders) table_flags |= ImGuiTableFlags_NoBordersInBody;
-        if (ImGui::BeginTable("idps", 6, table_flags)) {
+        // Column count is fixed at 7 so ImGui's persisted per-column state
+        // (width, order, visibility) keeps its identity; the optional
+        // Subgroup column is enabled/disabled below rather than added and
+        // removed, which would invalidate that state every toggle.
+        if (ImGui::BeginTable("idps", 7, table_flags)) {
             // Seed the header sort arrow from the persisted sort_mode so the
             // indicator matches the actual row order on launch (DefaultSort
             // only applies when ImGui has no saved table state — harmless
@@ -329,6 +383,9 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
             ImGui::TableSetupColumn("Prof",
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_NoSort, 22.0f);
+            ImGui::TableSetupColumn("Sub",
+                                    ImGuiTableColumnFlags_WidthFixed |
+                                    def_sort(4), 26.0f);
             ImGui::TableSetupColumn("Name",
                                     ImGuiTableColumnFlags_WidthStretch |
                                     def_sort(2));
@@ -353,31 +410,43 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                     ImGuiTableColumnFlags_WidthFixed |
                                     ImGuiTableColumnFlags_PreferSortDescending,
                                     40.0f);
-            ImGui::TableHeadersRow();
+            if (s.show_headers) ImGui::TableHeadersRow();
 
-            // Drop low-priority columns as the window narrows. Sacrifice
-            // order: % -> Combat -> Damage -> DPS. Prof + Name always stay.
-            if (s.responsive_columns) {
-                if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
-                    bool show_pct    = table_avail_w > 320.0f;
-                    bool show_combat = table_avail_w > 270.0f;
-                    bool show_dmg    = table_avail_w > 220.0f;
-                    bool show_dps    = table_avail_w > 170.0f;
-                    // Force enabled-state only on threshold crossings, otherwise
-                    // every frame stomps the user's header-menu toggles and they
-                    // can't manually hide a column.
-                    static bool prev_pct = true, prev_combat = true,
-                                prev_dmg = true, prev_dps = true;
-                    static bool init = false;
-                    if (tbl->ColumnsCount >= 6) {
+            // Column visibility. Both rules write IsUserEnabledNextFrame
+            // only when their input actually changed — writing it every
+            // frame would stomp the user's own header-menu toggles and make
+            // manually hiding a column impossible.
+            if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
+                if (tbl->ColumnsCount >= 7) {
+                    // Subgroup follows its setting outright: it is the
+                    // switch for that column, so it wins over the menu.
+                    static bool prev_sub = false;
+                    static bool sub_init = false;
+                    if (!sub_init || s.show_subgroup != prev_sub) {
+                        tbl->Columns[1].IsUserEnabledNextFrame = s.show_subgroup;
+                        prev_sub = s.show_subgroup;
+                        sub_init = true;
+                    }
+
+                    // Drop low-priority columns as the window narrows.
+                    // Sacrifice order: % -> Time -> Damage -> DPS. Prof and
+                    // Name always stay.
+                    if (s.responsive_columns) {
+                        bool show_pct    = table_avail_w > 320.0f;
+                        bool show_combat = table_avail_w > 270.0f;
+                        bool show_dmg    = table_avail_w > 220.0f;
+                        bool show_dps    = table_avail_w > 170.0f;
+                        static bool prev_pct = true, prev_combat = true,
+                                    prev_dmg = true, prev_dps = true;
+                        static bool init = false;
                         if (!init || show_dps    != prev_dps)
-                            tbl->Columns[2].IsUserEnabledNextFrame = show_dps;
+                            tbl->Columns[3].IsUserEnabledNextFrame = show_dps;
                         if (!init || show_dmg    != prev_dmg)
-                            tbl->Columns[3].IsUserEnabledNextFrame = show_dmg;
+                            tbl->Columns[4].IsUserEnabledNextFrame = show_dmg;
                         if (!init || show_combat != prev_combat)
-                            tbl->Columns[4].IsUserEnabledNextFrame = show_combat;
+                            tbl->Columns[5].IsUserEnabledNextFrame = show_combat;
                         if (!init || show_pct    != prev_pct)
-                            tbl->Columns[5].IsUserEnabledNextFrame = show_pct;
+                            tbl->Columns[6].IsUserEnabledNextFrame = show_pct;
                         prev_dps    = show_dps;
                         prev_dmg    = show_dmg;
                         prev_combat = show_combat;
@@ -387,7 +456,13 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 }
             }
 
-            if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+            // Header-driven sorting. Skipped entirely when the header row is
+            // hidden: the table still reports its DefaultSort spec even with
+            // no header to click, and acting on it would overwrite whatever
+            // the user picked from the right-click Sort by menu.
+            ImGuiTableSortSpecs* specs = s.show_headers
+                                       ? ImGui::TableGetSortSpecs() : nullptr;
+            if (specs) {
                 // The first dirty pass is table setup (DefaultSort / restored
                 // ImGui state), not a user click. Consuming it without
                 // applying keeps the ini-persisted sort_mode + sort_reverse
@@ -404,24 +479,31 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                             specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
                         bool handled = true;
                         bool reverse = false;
+                        // Column index -> sort_mode. Damage and % share a
+                        // mode because % is derived from damage, so sorting
+                        // by either produces the same order.
                         switch (col_idx) {
-                            case 1:
+                            case 1: // Sub
+                                s.sort_mode = 4;
+                                reverse = !ascending;
+                                break;
+                            case 2: // Name
                                 s.sort_mode = 2;
                                 reverse = !ascending;
                                 break;
-                            case 2:
+                            case 3: // DPS
                                 s.sort_mode = 1;
                                 reverse = ascending;
                                 break;
-                            case 3:
+                            case 4: // Damage
                                 s.sort_mode = 0;
                                 reverse = ascending;
                                 break;
-                            case 4:
+                            case 5: // Time
                                 s.sort_mode = 3;
                                 reverse = ascending;
                                 break;
-                            case 5:
+                            case 6: // %
                                 s.sort_mode = 0;
                                 reverse = ascending;
                                 break;
@@ -454,11 +536,17 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                 ImGui::TableNextColumn();
 
                 // Full-row damage bar drawn before any cell text so text/icons
-                // render on top of the bar in the same drawlist.
+                // render on top of the bar in the same drawlist. Text uses
+                // arc's base profession shade, the bar its highlight shade —
+                // the same split arcdps itself draws with.
                 ImU32 prof_col = prof_color(r.prof);
-                if (!r.in_combat) prof_col = dim_alpha(prof_col);
+                ImU32 bar_base = prof_color_highlight(r.prof);
+                if (!r.in_combat) {
+                    prof_col = dim_color(prof_col);
+                    bar_base = dim_color(bar_base);
+                }
 
-                if (s.bar_full_row && max_damage > 0 && r.damage_total > 0) {
+                if (max_damage > 0 && r.damage_total > 0) {
                     if (ImGuiTable* tbl = ImGui::GetCurrentContext()->CurrentTable) {
                         float frac = static_cast<float>(r.damage_total) /
                                      static_cast<float>(max_damage);
@@ -467,7 +555,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         float row_h  = ImGui::GetTextLineHeight();
                         ImVec2 p0(bar_x0, ImGui::GetCursorScreenPos().y);
                         ImVec2 p1(bar_x0 + (bar_x1 - bar_x0) * frac, p0.y + row_h);
-                        ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
+                        ImU32 bar_col = with_alpha(bar_base, s.bar_alpha);
                         // Background channel clips the bar to the table rect,
                         // not the current cell.
                         ImGui::TablePushBackgroundChannel();
@@ -480,34 +568,39 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     align_icon_to_text();
                     ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(14, 14));
                 } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, prof_col);
                     ImGui::TextUnformatted(prof_short(r.prof));
+                    ImGui::PopStyleColor();
                 }
+                // The icon alone doesn't say which elite spec it is at 14px.
+                {
+                    char spec[32];
+                    format_spec(spec, sizeof(spec), r.prof, r.elite);
+                    item_tooltip(spec);
+                }
+
+                ImGui::TableNextColumn();
+                if (r.subgroup != 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, subgroup_color(r.subgroup));
+                    ImGui::Text("%u", static_cast<unsigned>(r.subgroup));
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::TextDisabled("-");
+                }
+
                 ImGui::TableNextColumn();
                 {
-                    ImU32 text_col;
-                    if (r.is_self && s.self_name_gold) {
-                        text_col = IM_COL32(255, 200, 60, 255);
-                    } else if (s.name_white) {
-                        text_col = IM_COL32(255, 255, 255, 255);
-                    } else {
-                        text_col = prof_col;
-                    }
-                    if (!r.in_combat) text_col = dim_alpha(text_col);
-
-                    if (!s.bar_full_row && max_damage > 0 && r.damage_total > 0) {
-                        float col_w = ImGui::GetContentRegionAvail().x;
-                        if (col_w > 0.0f) {
-                            float frac = static_cast<float>(r.damage_total) /
-                                         static_cast<float>(max_damage);
-                            ImVec2 p0 = ImGui::GetCursorScreenPos();
-                            float row_h = ImGui::GetTextLineHeight();
-                            ImVec2 p1 = ImVec2(p0.x + col_w * frac, p0.y + row_h);
-                            ImU32 bar_col = (prof_col & 0x00FFFFFFu) | (0x80u << 24);
-                            ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, bar_col);
-                        }
-                    }
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, text_col);
+                    // Names render in the default text colour, so they match
+                    // the metric columns beside them exactly rather than
+                    // approximating white — arc's style owns that colour.
+                    // They are also deliberately never dimmed out of combat:
+                    // the profession icon and the damage bar already carry
+                    // the combat state, and shading the names as well left
+                    // the table looking inconsistent between rows.
+                    bool tint_name = r.is_self && s.self_name_gold;
+                    if (tint_name)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                                              IM_COL32(255, 200, 60, 255));
                     // Pointer overload hashes the full 64-bit agent id so
                     // two agents whose low 32 bits collide can't alias
                     // popup / selectable state.
@@ -542,8 +635,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                                 tip_cache.fight != viewed_fight ||
                                 now_ms - tip_cache.last_ms > 250) {
                                 tip_cache.ok = viewing_history
-                                    ? tracker().top_skills_at(hist_n - viewed_fight,
-                                                              r.id, 3, tip_cache.data)
+                                    ? tracker().top_skills_for(viewed_start_wall,
+                                                               r.id, 3, tip_cache.data)
                                     : tracker().top_skills(r.id, 3, tip_cache.data);
                                 tip_cache.agent   = r.id;
                                 tip_cache.fight   = viewed_fight;
@@ -584,47 +677,46 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                     if (ImGui::BeginPopupContextItem("##agent_fh")) {
                         ImGui::Text("Fight history - %s", r.name.c_str());
                         ImGui::Separator();
-                        if (viewed_fight != 0) {
-                            if (ImGui::MenuItem("Current (live)")) {
-                                viewed_fight      = 0;
-                                viewed_start_wall = 0;
-                                ImGui::CloseCurrentPopup();
-                            }
+                        // Current first, then newest downwards — same order
+                        // as the window menu.
+                        if (ImGui::MenuItem("Current (live)", nullptr,
+                                            viewed_fight == 0)) {
+                            viewed_start_wall = 0;
+                            ImGui::CloseCurrentPopup();
                         }
-                        int n_hist = tracker().history_size();
-                        if (n_hist == 0) {
+                        if (hist_n == 0) {
                             ImGui::TextDisabled("(no past fights yet)");
                         }
-                        // back = 1 is the most recent fight — list is
-                        // newest-first by construction.
-                        for (int back = 1; back <= n_hist; ++back) {
-                            int storage_idx = n_hist - back;
-                            FightSummary fsum;
-                            if (!tracker().fight_summary_at(storage_idx, fsum))
-                                continue;
+                        // hist is newest-first, so index 0 is "-1".
+                        for (int i = 0; i < hist_n; ++i) {
+                            const FightSummary& fsum = hist[i];
+                            int back = i + 1;
                             uint64_t dur = fsum.end_wall > fsum.start_wall
                                          ? fsum.end_wall - fsum.start_wall : 0;
                             char dbuf[32], cbuf[16];
                             format_time (dbuf, sizeof(dbuf), dur);
                             format_clock(cbuf, sizeof(cbuf), fsum.end_clock);
                             const char* clock = cbuf[0] ? cbuf : "--:--";
+                            const char* boss  = fsum.boss_name;
                             Snapshot ag{};
-                            char label[160];
-                            if (tracker().agent_snapshot_at(storage_idx, r.id, ag)) {
+                            char label[224];
+                            if (tracker().agent_snapshot_for(fsum.start_wall,
+                                                             r.id, ag)) {
                                 char dpsbuf[16], dmgbuf[16];
                                 format_count(dpsbuf, sizeof(dpsbuf), ag.dps);
                                 format_count(dmgbuf, sizeof(dmgbuf), ag.damage_total);
                                 snprintf(label, sizeof(label),
-                                         "-%d  %s  (%s)   %s DPS   %s dmg",
-                                         back, clock, dbuf, dpsbuf, dmgbuf);
+                                         "-%d  %s  (%s)   %s DPS   %s dmg%s%s",
+                                         back, clock, dbuf, dpsbuf, dmgbuf,
+                                         boss ? "   - " : "", boss ? boss : "");
                             } else {
                                 snprintf(label, sizeof(label),
-                                         "-%d  %s  (%s)   (not present)",
-                                         back, clock, dbuf);
+                                         "-%d  %s  (%s)   (not present)%s%s",
+                                         back, clock, dbuf,
+                                         boss ? "   - " : "", boss ? boss : "");
                             }
-                            bool selected = (viewed_fight == back);
-                            if (ImGui::MenuItem(label, nullptr, selected)) {
-                                viewed_fight      = back;
+                            if (ImGui::MenuItem(label, nullptr,
+                                                viewed_fight == back)) {
                                 viewed_start_wall = fsum.start_wall;
                                 ImGui::CloseCurrentPopup();
                             }
@@ -632,7 +724,7 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
                         ImGui::EndPopup();
                     }
                     ImGui::PopID();
-                    ImGui::PopStyleColor();
+                    if (tint_name) ImGui::PopStyleColor();
                 }
                 ImGui::TableNextColumn();
                 char buf[16];
@@ -674,11 +766,8 @@ uintptr_t mod_imgui(uint32_t not_charsel_or_loading, uint32_t /*hide_if_combat_o
     }
     if (s.downs_open)
         draw_downs_window(&s.downs_open, g_rows, viewed_fight, &go_live);
-    draw_detail_window(viewed_fight);
-    if (go_live) {
-        viewed_fight      = 0;
-        viewed_start_wall = 0;
-    }
+    draw_detail_window(viewed_fight, viewed_start_wall);
+    if (go_live) viewed_start_wall = 0;
 
     // While viewing history g_rows holds past-fight agents; pruning against
     // them would evict every live agent's EMA state.

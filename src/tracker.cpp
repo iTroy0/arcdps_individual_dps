@@ -111,7 +111,8 @@ namespace {
         return s.accumulated_ms > 0 || s.damage_total > 0 ||
                s.strip_count > 0 || s.cleanse_count > 0 ||
                s.damage_to_downed > 0 || s.downs_contributed > 0 ||
-               s.kills_contributed > 0;
+               s.kills_contributed > 0 || s.interrupts > 0 ||
+               s.cc_count > 0;
     }
 
     void reset_for_new_fight(AgentState& s) {
@@ -124,9 +125,120 @@ namespace {
         s.damage_to_downed    = 0;
         s.downs_contributed   = 0;
         s.kills_contributed   = 0;
+        s.interrupts          = 0;
+        s.cc_count            = 0;
+        s.cc_duration_ms      = 0;
         s.alive               = true;
         s.skills.clear();
         s.history.clear();
+    }
+
+    // Build the UI-facing row for an agent. Centralised so the live and the
+    // two past-fight readouts can never drift apart as Snapshot grows.
+    Snapshot make_snapshot(const AgentState& s, uint64_t combat_ms,
+                           bool in_combat) {
+        // 500ms floor on the denominator — the first hit reads as
+        // damage / 500ms, then settles to the running average.
+        uint64_t denom = combat_ms < 500 ? 500 : combat_ms;
+        Snapshot out;
+        out.id                = s.id;
+        out.name              = s.name;
+        out.account           = s.account;
+        out.prof              = s.prof;
+        out.elite             = s.elite;
+        out.subgroup          = s.subgroup;
+        out.combat_ms         = combat_ms;
+        out.damage_total      = s.damage_total;
+        out.dps               = s.damage_total * 1000ull / denom;
+        out.strip_count       = s.strip_count;
+        out.cleanse_count     = s.cleanse_count;
+        out.damage_to_downed  = s.damage_to_downed;
+        out.downs_contributed = s.downs_contributed;
+        out.kills_contributed = s.kills_contributed;
+        out.interrupts        = s.interrupts;
+        out.cc_count          = s.cc_count;
+        out.cc_duration_ms    = s.cc_duration_ms;
+        out.in_combat         = in_combat;
+        out.is_self           = s.is_self;
+        return out;
+    }
+
+    // Damage window for a stored fight: first credited hit to last.
+    uint64_t stored_combat_ms(const AgentState& s) {
+        if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall)
+            return s.last_damage_wall - s.first_damage_wall;
+        return 0;
+    }
+}
+
+// Log-target species ids, transcribed from the evtc README's `characters[]`
+// table (the npcs arcdps starts logs on). Only the ids the README names are
+// listed; anything else falls through to nullptr and the UI shows no
+// encounter label rather than a wrong one.
+const char* boss_name_for(uint32_t id) {
+    switch (id) {
+        // Raids
+        case 15438: return "Vale Guardian";
+        case 15429: return "Gorseval";
+        case 15375: return "Sabetha";
+        case 16123: return "Slothasor";
+        case 16088: return "Bandit Trio";
+        case 16115: return "Matthias";
+        case 16253: return "Escort";
+        case 16235: return "Keep Construct";
+        case 16247: return "Twisted Castle";
+        case 16246: return "Xera";
+        case 17194: return "Cairn";
+        case 17172: return "Mursaat Overseer";
+        case 17188: return "Samarog";
+        case 17154: return "Deimos";
+        case 19767: return "Soulless Horror";
+        case 19828: return "River of Souls";
+        case 19691: return "Broken King";
+        case 19536: return "Eater of Souls";
+        case 19844: return "Eye of Fate";
+        case 19450: return "Dhuum";
+        case 21105: return "Nikare";
+        case 20934: return "Qadim";
+        case 21964: return "Sabir";
+        case 22006: return "Adina";
+        case 22000: return "Qadim the Peerless";
+        case 26725: return "Greer";
+        case 26774: return "Decima";
+        case 26867: return "Decima CM";
+        case 26712: return "Ura";
+        // Special
+        case 21333: return "Freezie";
+        // Fractals
+        case 17021: return "MAMA";
+        case 17028: return "Siax";
+        case 16948: return "Ensolyss";
+        case 17632: return "Skorvald";
+        case 17949: return "Artsariiv";
+        case 17759: return "Arkk";
+        case 23254: return "Sorrowful Spellcaster";
+        case 25577: return "Kanaxai";
+        case 26231: return "Eparch";
+        case 27010: return "Whispering Shadow";
+        // Strike missions
+        case 22154: return "Icebrood Construct";
+        case 22343: return "Kodan Brothers";
+        case 22492: return "Fraenir of Jormag";
+        case 22521: return "Boneskinner";
+        case 22711: return "Whisper of Jormag";
+        case 24033: return "Mai Trin";
+        case 23957: return "Ankka";
+        case 24485: return "Minister Li";
+        case 24266: return "Minister Li CM";
+        case 25413: return "Old Lion's Court";
+        case 25414: return "Old Lion's Court CM";
+        case 25705: return "Dagda";
+        case 25989: return "Cerus";
+        // Golems / benchmark
+        case 16199: case 16177: case 16198: case 16178: case 16202:
+        case 16169: case 16176: case 16174: case 19645: case 19676:
+            return "Training Golem";
+        default: return nullptr;
     }
 }
 
@@ -159,6 +271,12 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
                 // known account.
                 if (dst && dst->name && dst->name[0] == ':' && dst->name[1])
                     s.account = dst->name + 1;
+                // Per the api README's tracking-add layout: src->team is the
+                // world/team id, dst->team the squad subgroup. Only assign
+                // when non-zero — arc sends 0 for "not in a subgroup", and a
+                // later add that omits it must not erase a known value.
+                if (src->team != 0) s.team = src->team;
+                if (dst && dst->team != 0) s.subgroup = dst->team;
                 if (dst && dst->id) {
                     uint16_t new_instid = static_cast<uint16_t>(dst->id & 0xFFFFu);
                     auto existing = instid_to_id_.find(new_instid);
@@ -237,8 +355,15 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
     // the strip/cleanse counters would barely move. Some arc builds also
     // surface the dedicated CBTS_BUFFREMOVE_ALL/SINGLE statechanges; handle
     // both forms in one place.
+    // The in-band form additionally requires ev->buff ("skill is a buff")
+    // and no buff damage. The current evtc README documents is_buffremove
+    // only under the dedicated CBTS_BUFFREMOVE_* statechanges, so on a plain
+    // CBTS_COMBAT event that byte is not guaranteed to mean anything —
+    // without these two guards a condition tick carrying a stray value could
+    // be read as a removal and counted as a cleanse.
     bool is_buff_remove =
-        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove != 0) ||
+        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove != 0 &&
+         ev->buff != 0 && ev->buff_dmg == 0) ||
         ev->is_statechange == CBTS_BUFFREMOVE_ALL ||
         ev->is_statechange == CBTS_BUFFREMOVE_SINGLE;
     if (is_buff_remove) {
@@ -257,13 +382,40 @@ void Tracker::on_combat(cbtevent* ev, ag* src, ag* dst,
 void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
     switch (ev->is_statechange) {
         case CBTS_ENTERCOMBAT:
-            enter_combat(src, ev->time);
+            enter_combat(ev, src);
             break;
         case CBTS_EXITCOMBAT:
-            exit_combat(src, ev->time);
+            exit_combat(ev, src);
+            break;
+        case CBTS_CHANGEUP:
+            // Agent is alive again — a rally out of downstate, or a revive.
+            // Clearing the per-target down state matters: without it the
+            // sticky downed_ flag makes the next down on this target look
+            // like a continuation and no one is credited for it.
+            if (src && src->id) {
+                auto it = agents_.find(src->id);
+                if (it != agents_.end()) it->second.alive = true;
+                downed_.erase(src->id);
+                last_attacker_.erase(src->id);
+                target_dmg_.erase(src->id);
+            }
+            break;
+        case CBTS_TEAMCHANGE:
+            // dst_agent is the new team id. Relevant in WvW, where a player
+            // can flip sides across a borderland transfer.
+            if (src && src->id) {
+                auto it = agents_.find(src->id);
+                if (it != agents_.end())
+                    it->second.team = static_cast<uint16_t>(ev->dst_agent & 0xFFFFu);
+            }
+            break;
+        case CBTS_LOGNPCUPDATE:
+            // src_agent is the species id of the encounter arc is logging.
+            // Recorded so the closed fight can be labelled in history.
+            current_boss_species_ = static_cast<uint32_t>(ev->src_agent & 0xFFFFFFFFu);
             break;
         case CBTS_CHANGEDEAD:
-            force_exit(src, ev->time);
+            force_exit(src);
             if (src && src->id) {
                 auto it = agents_.find(src->id);
                 if (it != agents_.end()) it->second.alive = false;
@@ -301,6 +453,10 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             // first credited damage), so a squadmate's pull cannot reset
             // rows for people not yet in combat.
             in_encounter_ = true;
+            // A new encounter supersedes whatever log target was in effect;
+            // arc re-sends CBTS_LOGNPCUPDATE for this one.
+            current_boss_species_ = 0;
+            sq_end_clock_         = 0;
             break;
         case CBTS_MAPCHANGE:
             // Realtime signal that the local player changed maps. Squadmates
@@ -341,6 +497,10 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
             in_encounter_  = false;
             break;
         case CBTS_SQCOMBATEND:
+            // buff_dmg carries the local unix timestamp of the close (value
+            // carries the server's). Using arc's own stamp makes the history
+            // clock exact instead of a back-dated estimate from wall ticks.
+            sq_end_clock_ = static_cast<uint32_t>(ev->buff_dmg);
             for (auto& [id, s] : agents_) {
                 if (s.in_combat_wall) {
                     uint64_t w = wall_now();
@@ -365,17 +525,47 @@ void Tracker::on_statechange(cbtevent* ev, ag* src, ag* dst) {
 void Tracker::on_buff_remove(cbtevent* ev, ag* src, ag* dst) {
     // Count one per server-authoritative removal: CBTB_ALL (last/all stacks
     // of a buff cleared) or CBTB_SINGLE (one stack). Skip CBTB_MANUAL — arc
-    // synthesizes one per stack on an all-remove, so counting it would
-    // multiply the tally by the stack size. Both the classic
-    // (is_statechange == CBTS_COMBAT, kind in is_buffremove) and the
-    // dedicated-statechange delivery forms map onto the same two kinds.
-    bool is_all =
-        ev->is_statechange == CBTS_BUFFREMOVE_ALL ||
-        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove == CBTB_ALL);
-    bool is_single =
-        ev->is_statechange == CBTS_BUFFREMOVE_SINGLE ||
-        (ev->is_statechange == CBTS_COMBAT && ev->is_buffremove == CBTB_SINGLE);
+    // synthesizes one of those per stack on an all-remove, so counting it
+    // would multiply the tally by the stack size.
+    //
+    // The kind lives in is_buffremove in both delivery forms: the classic
+    // in-band one (is_statechange == CBTS_COMBAT) and the dedicated
+    // CBTS_BUFFREMOVE_* statechanges, which the evtc README documents as
+    // also carrying "is_buffremove: of enum cbtbuffremove". Reading the
+    // statechange alone would accept arc's synthesized CBTB_MANUAL events,
+    // which arrive as CBTS_BUFFREMOVE_SINGLE — so gate on the field.
+    uint8_t kind = ev->is_buffremove;
+    // Should a build leave the field unset on a dedicated statechange, the
+    // statechange names the kind itself and is taken as authoritative. This
+    // never resurrects CBTB_MANUAL, which is an explicit non-zero value.
+    if (kind == CBTB_NONE) {
+        if (ev->is_statechange == CBTS_BUFFREMOVE_ALL)         kind = CBTB_ALL;
+        else if (ev->is_statechange == CBTS_BUFFREMOVE_SINGLE) kind = CBTB_SINGLE;
+    }
+    bool is_all    = kind == CBTB_ALL;
+    bool is_single = kind == CBTB_SINGLE;
     if (!is_all && !is_single) return;
+
+    // The server sends a removal event when a buff simply RUNS OUT, not only
+    // when a skill takes it off. Both look identical apart from one field:
+    // the evtc README documents `value` as "ms duration removed" (and, on an
+    // all-remove, `buff_dmg` as the same figure computed as intensity, which
+    // is the meaningful one for intensity-stacking conditions like Bleeding
+    // or Vulnerability). A natural expiry removes nothing — the buff already
+    // ran to zero — so that figure is ~0. A real cleanse or strip takes
+    // measurable remaining duration off.
+    //
+    // Without this, every Bleeding, Cripple and Vulnerability that ticked out
+    // on a squad member scored that member a cleanse, which is what made the
+    // numbers read high. Strips were affected far less, because a foe's boons
+    // expiring have the foe as both source and remover, and a foe is not a
+    // tracked player — so those were already being dropped below.
+    //
+    // The floor absorbs server tick granularity (~40ms); a cleanse of a
+    // condition with under 50ms left is worth nothing anyway.
+    constexpr int32_t kMinRemovedMs = 50;
+    int32_t removed_ms = ev->value > ev->buff_dmg ? ev->value : ev->buff_dmg;
+    if (removed_ms < kMinRemovedMs) return;
 
     // src = agent that lost the buff, dst = remover (the player we credit).
     if (!dst || !dst->id) return;
@@ -411,13 +601,29 @@ void Tracker::on_buff_remove(cbtevent* ev, ag* src, ag* dst) {
     agent.last_activity_wall = wall_now();
 }
 
-void Tracker::enter_combat(ag* src, uint64_t time) {
+// CBTS_ENTERCOMBAT / EXITCOMBAT carry the agent's identity in the event
+// body rather than in `ag`: value = prof id, buff_dmg = elite spec id,
+// dst_agent = subgroup. Apply whatever of that is present.
+static void apply_combat_identity(AgentState& s, const cbtevent* ev) {
+    uint32_t prof  = static_cast<uint32_t>(ev->value);
+    uint32_t elite = static_cast<uint32_t>(ev->buff_dmg);
+    if (prof >= 1 && prof <= 9) {
+        s.prof  = prof;
+        s.elite = elite;
+    }
+    uint16_t sub = static_cast<uint16_t>(ev->dst_agent & 0xFFFFu);
+    if (sub != 0 && sub <= 15) s.subgroup = sub;
+}
+
+void Tracker::enter_combat(cbtevent* ev, ag* src) {
     if (!src || !src->id) return;
     auto* s = touch_agent(src);
     if (!s) {
-        // Squadmate ENTERCOMBAT before tracking-add — lazy-register. No dst
-        // is passed for state-changes, so use a prof-only heuristic.
-        if (prof_looks_like_player(src)) {
+        // Squadmate ENTERCOMBAT before tracking-add — lazy-register. `ag`
+        // is not populated with prof/elite for state changes, so the
+        // event body is the authoritative source here.
+        uint32_t ev_prof = static_cast<uint32_t>(ev->value);
+        if (prof_looks_like_player(src) || (ev_prof >= 1 && ev_prof <= 9)) {
             auto& as = agents_[src->id];
             as.id        = src->id;
             as.name      = src->name ? src->name : "";
@@ -429,6 +635,7 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
         }
     }
     if (!s) return;
+    apply_combat_identity(*s, ev);
 
     if (!s->in_combat_wall) {
         uint64_t now = wall_now();
@@ -448,7 +655,6 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
         }
         s->in_combat_wall = now;
     }
-    (void)time;
 
     any_in_combat_ = std::any_of(agents_.begin(), agents_.end(),
         [](const auto& p) { return p.second.in_combat_wall.has_value(); });
@@ -457,11 +663,14 @@ void Tracker::enter_combat(ag* src, uint64_t time) {
     }
 }
 
-void Tracker::exit_combat(ag* src, uint64_t time) {
+void Tracker::exit_combat(cbtevent* ev, ag* src) {
     if (!src || !src->id) return;
     auto it = agents_.find(src->id);
     if (it == agents_.end()) return;
     auto& s = it->second;
+    // EXITCOMBAT carries the same identity payload as ENTERCOMBAT; a build
+    // swap made while out of combat surfaces here first.
+    if (ev) apply_combat_identity(s, ev);
     if (s.in_combat_wall) {
         uint64_t w = wall_now();
         if (w > *s.in_combat_wall) s.accumulated_ms += w - *s.in_combat_wall;
@@ -470,13 +679,12 @@ void Tracker::exit_combat(ag* src, uint64_t time) {
     // Armed but exited without acting — the "fight" never started. Disarm
     // so the untouched stats simply remain on the row.
     s.fight_armed = false;
-    (void)time;
     any_in_combat_ = std::any_of(agents_.begin(), agents_.end(),
         [](const auto& p) { return p.second.in_combat_wall.has_value(); });
 }
 
-void Tracker::force_exit(ag* src, uint64_t time) {
-    exit_combat(src, time);
+void Tracker::force_exit(ag* src) {
+    exit_combat(nullptr, src);
 }
 
 void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
@@ -561,20 +769,39 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         (void)revision;
     }
 
-    // A killing blow must survive the delta gate below: it frequently
-    // arrives with value <= 0 — overkill past 0 HP, a barrier-absorbed
-    // lethal hit, or the post-2026-04-14 feed's negative encodings — so
-    // gating the kill on delta > 0 dropped virtually every one (unlike
-    // downs, which the is_offcycle discovery path recovers). Let it through;
-    // the kill is credited at the end, AFTER fight-boundary management, so
-    // it lands on the correct fight and a deferred/implicit reset can't wipe
-    // it (a killing blow is commonly a player's first action after a gap —
-    // running up to finish a downed foe). Enemy players only; NPC/gadget
-    // deaths flow through CBTS_CHANGEDEAD.
+    // Four event kinds must survive the delta gate below, because all of
+    // them routinely carry no damage while still being real contributions.
+    // Each is credited at the very end of this function, AFTER fight-boundary
+    // management, so it lands on the correct fight and a deferred or implicit
+    // reset cannot wipe it — a killing blow in particular is commonly a
+    // player's first action after a gap, running up to finish a downed foe.
+    //
+    // A killing blow frequently arrives with value <= 0: overkill past 0 HP,
+    // a barrier-absorbed lethal hit, or the post-2026-04-14 feed's negative
+    // encodings. Enemy players only; NPC/gadget deaths flow through
+    // CBTS_CHANGEDEAD.
     bool is_killing_blow = ev->buff == 0 && ev->result == CBTR_KILLINGBLOW &&
                            dst && dst->id && dst->elite != 0xFFFFFFFFu;
 
-    if (delta == 0 && !is_killing_blow) return;
+    // The hit that puts a target into downstate is likewise usually the one
+    // that overkills their remaining health, so `value` lands at or below
+    // zero and the event would be dropped before the down state machine ever
+    // saw it. The is_offcycle discovery path recovers some of these, but only
+    // when a later event happens to observe the target; letting the explicit
+    // CBTR_DOWNED through credits the finisher directly.
+    bool is_downing_blow = ev->result == CBTR_DOWNED &&
+                           dst && dst->id && dst->elite != 0xFFFFFFFFu;
+
+    // Control events carry no damage at all: CBTR_INTERRUPT reports a
+    // cancelled action, CBTR_CROWDCONTROL puts the applied disable duration
+    // (ms) in `value`. Both are contributions worth attributing, and both
+    // are invisible to a damage-only gate.
+    bool is_interrupt = ev->result == CBTR_INTERRUPT;
+    bool is_cc        = ev->result == CBTR_CROWDCONTROL;
+
+    bool credited_nondamage = is_killing_blow || is_downing_blow ||
+                              is_interrupt || is_cc;
+    if (delta == 0 && !credited_nondamage) return;
 
     uint64_t now = wall_now();
     bool     gap_enabled = options().fight_gap_enabled.load(std::memory_order_relaxed);
@@ -710,7 +937,12 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         // Only accumulate while target is up (pre-down hits). The
         // discovery event (is_down=1, was_down=0) and cleave-on-downed
         // events are post-down and don't count toward contribution.
-        if (!is_down && !was_down) {
+        //
+        // delta > 0 is required: zero-damage control events now reach this
+        // point, and letting one write last_attacker_ would hand the down
+        // credit to whoever last dazed the target instead of whoever
+        // actually brought their health down.
+        if (delta > 0 && !is_down && !was_down) {
             target_dmg_[dst->id][owner->id] += delta;
             last_attacker_[dst->id]         = owner->id;
         }
@@ -783,6 +1015,16 @@ void Tracker::on_damage(cbtevent* ev, ag* src, ag* dst,
         last_attacker_.erase(dst->id);
     }
 
+    // Control credit, taken alongside the kill for the same reason: after
+    // fight-boundary management, so an interrupt or a stun landing as the
+    // first action of a new fight isn't wiped by the reset it triggered.
+    if (is_interrupt) owner->interrupts += 1;
+    if (is_cc) {
+        owner->cc_count += 1;
+        if (ev->value > 0)
+            owner->cc_duration_ms += static_cast<uint64_t>(ev->value);
+    }
+
     // Sample cumulative damage every ~500ms. deque pop_front is O(1) —
     // vector::erase(begin) was O(n) and stalled the combat thread on long
     // fights once the cap was reached. Skipped for a zero-damage killing
@@ -852,6 +1094,9 @@ void Tracker::reset_fight() {
             s.damage_to_downed    = 0;
             s.downs_contributed   = 0;
             s.kills_contributed   = 0;
+            s.interrupts          = 0;
+            s.cc_count            = 0;
+            s.cc_duration_ms      = 0;
             s.alive               = true;
             s.fight_armed         = false;
             s.skills.clear();
@@ -884,8 +1129,14 @@ void Tracker::push_to_history() {
     downed_.clear();
     last_attacker_.clear();
 
-    // No fight opened since the last push — nothing to record.
-    if (current_fight_start_wall_ == 0) return;
+    // No fight opened since the last push — nothing to record. The
+    // encounter identity still drops, so a log target seen without a fight
+    // (or one left over from a fight already pushed) cannot label the next.
+    if (current_fight_start_wall_ == 0) {
+        current_boss_species_ = 0;
+        sq_end_clock_         = 0;
+        return;
+    }
 
     // End the fight at the last credited hit, not at push time: in WvW the
     // push runs at manual Reset or MAPCHANGE, often minutes after combat,
@@ -901,20 +1152,31 @@ void Tracker::push_to_history() {
     }
 
     FightSnapshot fs;
-    fs.start_wall = current_fight_start_wall_;
-    fs.end_wall   = end_wall;
-    // Back-date the clock stamp by the same gap so "21:34 (5m ago)" refers
-    // to when the fighting stopped, not when the user hit Reset.
-    fs.end_clock  = static_cast<uint64_t>(std::time(nullptr))
-                  - (now_wall - end_wall) / 1000;
+    fs.start_wall   = current_fight_start_wall_;
+    fs.end_wall     = end_wall;
+    fs.boss_species = current_boss_species_;
+    if (sq_end_clock_ != 0) {
+        // arc told us exactly when the encounter closed (CBTS_SQCOMBATEND).
+        fs.end_clock = sq_end_clock_;
+    } else {
+        // No SQCOMBATEND — WvW, or a manual reset. Back-date the clock stamp
+        // by the wall gap so "21:34 (5m ago)" refers to when the fighting
+        // stopped, not when the user hit Reset.
+        fs.end_clock = static_cast<uint64_t>(std::time(nullptr))
+                     - (now_wall - end_wall) / 1000;
+    }
 
     bool has_data  = false;
     bool any_score = false; // any down or kill — short fights that scored stay
     for (const auto& [id, s] : agents_) {
         if (!s.is_player) continue;
+        // Contribution only — deliberately not has_fight_state(), which also
+        // counts time spent in combat. A squad standing in combat doing
+        // nothing must not manufacture a history entry.
         if (s.damage_total == 0 && s.strip_count == 0 &&
             s.cleanse_count == 0 && s.damage_to_downed == 0 &&
-            s.downs_contributed == 0 && s.kills_contributed == 0) continue;
+            s.downs_contributed == 0 && s.kills_contributed == 0 &&
+            s.interrupts == 0 && s.cc_count == 0) continue;
         if (s.downs_contributed > 0 || s.kills_contributed > 0)
             any_score = true;
         // Clone, then drop per-skill hits_history to keep memory bounded.
@@ -932,6 +1194,8 @@ void Tracker::push_to_history() {
     }
 
     current_fight_start_wall_ = 0;
+    current_boss_species_     = 0;
+    sq_end_clock_             = 0;
 
     if (!has_data) return;
 
@@ -951,75 +1215,101 @@ void Tracker::push_to_history() {
     }
 }
 
-int Tracker::history_size() const {
+void Tracker::tick() {
+    // Auto-close a fight that has gone quiet. Without this, WvW never
+    // produces a history entry on its own: CBTS_SQCOMBATEND is instanced
+    // content only, and a map change or a manual Reset are the only other
+    // things that push. The whole session ended up as one entry.
+    //
+    // Disabled alongside smart fight boundaries — with those off the user
+    // has asked for the legacy immediate-reset behaviour and no gap concept.
+    if (!options().fight_gap_enabled.load(std::memory_order_relaxed)) return;
+
     std::lock_guard<std::mutex> lock(mutex_);
-    return static_cast<int>(history_.size());
+    if (current_fight_start_wall_ == 0) return; // nothing open to close
+    if (any_in_combat_) return;                 // still fighting
+
+    // Newest credited action across the squad. Combat having dropped is not
+    // enough on its own: GW2 leaves combat ~4s after the last hit, and a
+    // re-engage inside the gap is the same fight by this plugin's own rule.
+    uint64_t last = 0;
+    for (const auto& [id, s] : agents_) {
+        if (!s.is_player) continue;
+        if (s.last_activity_wall > last) last = s.last_activity_wall;
+    }
+    // A fight that opened but never scored anything has no activity stamp;
+    // measure from its start so it cannot linger open forever. push_to_history
+    // drops it as empty and clears the open-fight state either way.
+    uint64_t ref = last != 0 ? last : current_fight_start_wall_;
+    uint64_t now = wall_now();
+    if (now <= ref) return;
+    if (now - ref < options().fight_gap_ms.load(std::memory_order_relaxed))
+        return;
+
+    // Rows keep their numbers — this closes the fight for history only. The
+    // existing deferred-reset rule wipes them on the first action of the
+    // next fight, so the last fight stays readable while out of combat.
+    push_to_history();
 }
 
-bool Tracker::snapshot_at(int idx, std::vector<Snapshot>& out) const {
+const FightSnapshot* Tracker::find_fight(uint64_t start_wall) const {
+    // Caller holds mutex_.
+    if (start_wall == 0) return nullptr;
+    for (const auto& fs : history_) {
+        if (fs.start_wall == start_wall) return &fs;
+    }
+    return nullptr;
+}
+
+void Tracker::fight_summaries(std::vector<FightSummary>& out) const {
     out.clear();
     std::lock_guard<std::mutex> lock(mutex_);
-    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    const FightSnapshot& fs = history_[idx];
-    out.reserve(fs.agents.size());
-    for (const auto& [id, s] : fs.agents) {
-        if (!s.is_player) continue;
-        uint64_t ms = 0;
-        if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall) {
-            ms = s.last_damage_wall - s.first_damage_wall;
+    out.reserve(history_.size());
+    // history_ is oldest-first; emit newest-first so index 0 is "Fight -1"
+    // and the UI never has to invert anything.
+    for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
+        const FightSnapshot& fs = *it;
+        FightSummary sum;
+        sum.start_wall   = fs.start_wall;
+        sum.end_wall     = fs.end_wall;
+        sum.end_clock    = fs.end_clock;
+        sum.boss_name    = boss_name_for(fs.boss_species);
+        sum.total_damage = 0;
+        sum.players      = 0;
+        for (const auto& [id, s] : fs.agents) {
+            if (!s.is_player) continue;
+            sum.total_damage += s.damage_total;
+            ++sum.players;
         }
-        uint64_t denom = ms < 500 ? 500 : ms;
-        uint64_t dps   = s.damage_total * 1000ull / denom;
-        out.push_back(Snapshot{
-            s.id, s.name, s.account, s.prof, s.elite,
-            ms, s.damage_total, dps,
-            s.strip_count, s.cleanse_count,
-            s.damage_to_downed, s.downs_contributed, s.kills_contributed,
-            false,           // past fights are never "in combat"
-            s.is_self,
-        });
+        out.push_back(sum);
     }
-    return true;
 }
 
-bool Tracker::fight_summary_at(int idx, FightSummary& out) const {
+bool Tracker::snapshot_for(uint64_t start_wall,
+                           std::vector<Snapshot>& out) const {
+    out.clear();
     std::lock_guard<std::mutex> lock(mutex_);
-    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    const FightSnapshot& fs = history_[idx];
-    out.start_wall   = fs.start_wall;
-    out.end_wall     = fs.end_wall;
-    out.end_clock    = fs.end_clock;
-    out.total_damage = 0;
-    out.players      = 0;
-    for (const auto& [id, s] : fs.agents) {
+    const FightSnapshot* fs = find_fight(start_wall);
+    if (!fs) return false;
+    out.reserve(fs->agents.size());
+    for (const auto& [id, s] : fs->agents) {
         if (!s.is_player) continue;
-        out.total_damage += s.damage_total;
-        ++out.players;
+        // Past fights are never "in combat".
+        out.push_back(make_snapshot(s, stored_combat_ms(s), /*in_combat=*/false));
     }
     return true;
 }
 
-bool Tracker::agent_snapshot_at(int idx, uintptr_t agent_id, Snapshot& out) const {
+bool Tracker::agent_snapshot_for(uint64_t start_wall, uintptr_t agent_id,
+                                 Snapshot& out) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    const FightSnapshot& fs = history_[idx];
-    auto it = fs.agents.find(agent_id);
-    if (it == fs.agents.end()) return false;
+    const FightSnapshot* fs = find_fight(start_wall);
+    if (!fs) return false;
+    auto it = fs->agents.find(agent_id);
+    if (it == fs->agents.end()) return false;
     const auto& s = it->second;
     if (!s.is_player) return false;
-    uint64_t ms = 0;
-    if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall) {
-        ms = s.last_damage_wall - s.first_damage_wall;
-    }
-    uint64_t denom = ms < 500 ? 500 : ms;
-    uint64_t dps   = s.damage_total * 1000ull / denom;
-    out = Snapshot{
-        s.id, s.name, s.account, s.prof, s.elite,
-        ms, s.damage_total, dps,
-        s.strip_count, s.cleanse_count,
-        s.damage_to_downed, s.downs_contributed, s.kills_contributed,
-        false, s.is_self,
-    };
+    out = make_snapshot(s, stored_combat_ms(s), /*in_combat=*/false);
     return true;
 }
 
@@ -1066,26 +1356,29 @@ bool Tracker::top_skills(uintptr_t agent_id, int n,
     return !out.empty();
 }
 
-bool Tracker::top_skills_at(int idx, uintptr_t agent_id, int n,
-                            std::vector<SkillDetail>& out) const {
+bool Tracker::top_skills_for(uint64_t start_wall, uintptr_t agent_id, int n,
+                             std::vector<SkillDetail>& out) const {
     out.clear();
     if (n <= 0) return false;
     std::lock_guard<std::mutex> lock(mutex_);
-    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    const FightSnapshot& fs = history_[idx];
-    auto it = fs.agents.find(agent_id);
-    if (it == fs.agents.end()) return false;
+    const FightSnapshot* fs = find_fight(start_wall);
+    if (!fs) return false;
+    auto it = fs->agents.find(agent_id);
+    if (it == fs->agents.end()) return false;
     fill_top_skills(it->second, skill_names_, n, out);
     return !out.empty();
 }
 
-bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
-                        uint32_t spike_skill) const {
+bool Tracker::detail_for(uint64_t start_wall, uintptr_t agent_id,
+                         AgentDetail& out, uint32_t spike_skill) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (idx < 0 || idx >= static_cast<int>(history_.size())) return false;
-    const FightSnapshot& fs = history_[idx];
-    auto it = fs.agents.find(agent_id);
-    if (it == fs.agents.end()) {
+    const FightSnapshot* fs = find_fight(start_wall);
+    if (!fs) {
+        out.name.clear();
+        return false;
+    }
+    auto it = fs->agents.find(agent_id);
+    if (it == fs->agents.end()) {
         out.name.clear();
         return false;
     }
@@ -1094,6 +1387,7 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
     out.account = s.account;
     out.prof  = s.prof;
     out.elite = s.elite;
+    out.subgroup = s.subgroup;
     out.history.assign(s.history.begin(), s.history.end());
     out.history_start_wall = !out.history.empty() ? out.history.front().wall_ms : 0;
     out.skills.clear();
@@ -1111,12 +1405,11 @@ bool Tracker::detail_at(int idx, uintptr_t agent_id, AgentDetail& out,
         sd.max_hit        = entry.max_hit;
         sd.first_hit_wall = entry.first_hit_wall;
         sd.last_hit_wall  = entry.last_hit_wall;
-        // entry.hits_history is empty by design (cleared on push_to_history);
-        // the spike filter is kept for signature symmetry with detail().
-        if (skid == spike_skill && spike_skill != 0) {
-            sd.hits_history.assign(entry.hits_history.begin(),
-                                   entry.hits_history.end());
-        }
+        // entry.hits_history is always empty here — push_to_history clears
+        // it to bound memory — so the spike overlay cannot render for a past
+        // fight and the UI hides that control while viewing one. The
+        // parameter is kept only for signature symmetry with detail().
+        (void)spike_skill;
         out.skills.push_back(std::move(sd));
     }
     std::sort(out.skills.begin(), out.skills.end(),
@@ -1129,8 +1422,10 @@ void Tracker::detail(uintptr_t id, AgentDetail& out,
     out.skills.clear();
     out.history.clear();
     out.name.clear();
+    out.account.clear();
     out.prof = 0;
     out.elite = 0;
+    out.subgroup = 0;
     out.history_start_wall = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1141,6 +1436,7 @@ void Tracker::detail(uintptr_t id, AgentDetail& out,
         out.account = s.account;
         out.prof  = s.prof;
         out.elite = s.elite;
+        out.subgroup = s.subgroup;
         out.history_start_wall = s.first_damage_wall;
         out.history.assign(s.history.begin(), s.history.end());
         out.skills.reserve(s.skills.size());
@@ -1206,20 +1502,10 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
                          ? now : s.last_damage_wall;
             if (end > s.first_damage_wall) ms = end - s.first_damage_wall;
         }
-        // 500ms floor on the denominator — first hit reads as
-        // damage / 500ms, then settles to the running average.
-        uint64_t denom = ms < 500 ? 500 : ms;
-        uint64_t dps   = s.damage_total * 1000ull / denom;
-        out.push_back(Snapshot{
-            s.id, s.name, s.account, s.prof, s.elite,
-            ms, s.damage_total, dps,
-            s.strip_count, s.cleanse_count,
-            s.damage_to_downed, s.downs_contributed, s.kills_contributed,
-            // Armed = old stats on display; render it as the paused row it
-            // is, not as live in-combat numbers.
-            s.in_combat_wall.has_value() && !s.fight_armed,
-            s.is_self,
-        });
+        // Armed = old stats on display; render it as the paused row it is,
+        // not as live in-combat numbers.
+        bool in_combat = s.in_combat_wall.has_value() && !s.fight_armed;
+        out.push_back(make_snapshot(s, ms, in_combat));
     }
 }
 

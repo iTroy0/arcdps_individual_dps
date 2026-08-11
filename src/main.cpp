@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <wrl/client.h>
 
+#include "arc_exports.h"
 #include "exports.h"
 #include "icons.h"
 #include "log.h"
@@ -25,14 +26,20 @@ BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*reserved*/) {
 }
 
 extern "C" __declspec(dllexport) void* get_init_addr(
-    char* /*arcversion*/,
+    char* arcversion,
     ImGuiContext* imguictx,
     void* id3dptr,
-    HANDLE /*arcdll*/,
+    HANDLE arcdll,
     void* mallocfn,
     void* freefn,
     uint32_t /*imguiversion*/) {
     idps::log_init();
+    // arcdll is the arcdps module itself. Binding it unlocks arc's helper
+    // exports — most importantly e5, whose profession colour tables we use
+    // so rows match arcdps's own palette exactly instead of approximating it.
+    idps::arc_bind(arcdll);
+    idps::arc_log("individual_dps: loaded, arc build %s",
+                  arcversion ? arcversion : "?");
     // Set allocator before SetCurrentContext so plugin's ImGui copy
     // allocates through arcdps's arena.
     if (mallocfn && freefn) {

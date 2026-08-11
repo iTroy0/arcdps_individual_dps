@@ -10,6 +10,7 @@
 #include <vector>
 #include <windows.h>
 
+#include "icons.h"
 #include "settings.h"
 #include "tracker.h"
 #include "ui_common.h"
@@ -53,8 +54,14 @@ bool consume_esc_for_detail() {
     return true;
 }
 
-void draw_detail_window(int viewed_history_idx) {
+void draw_detail_window(int viewed_history_idx, uint64_t viewed_start_wall) {
     auto& s = settings();
+    // The ordinal is for the label; start_wall selects the data.
+    const bool viewing_history = viewed_start_wall != 0;
+    // Drop any spike selection carried in from the live view. A stored fight
+    // has no per-hit timeline, so keeping it would print a "spike: <skill>"
+    // header for an overlay that cannot be drawn.
+    if (viewing_history) g_selected_skill = 0;
 
     // Apply a pending ESC-close request from the window thread, then keep
     // g_detail_visible in sync with the real open state on every exit path
@@ -79,20 +86,19 @@ void draw_detail_window(int viewed_history_idx) {
     {
         struct DetailCache {
             uintptr_t agent   = 0;
-            int       fight   = -1;
+            uint64_t  fight   = UINT64_MAX;
             uint32_t  spike   = 0;
             uint64_t  last_ms = 0;
         };
         static DetailCache dc;
         uint64_t now_ms = GetTickCount64();
         bool key_changed = dc.agent != sel ||
-                           dc.fight != viewed_history_idx ||
+                           dc.fight != viewed_start_wall ||
                            dc.spike != g_selected_skill;
         if (key_changed || now_ms - dc.last_ms > 250) {
-            if (viewed_history_idx > 0) {
-                int hist_idx = tracker().history_size() - viewed_history_idx;
-                if (!tracker().detail_at(hist_idx, sel, g_detail,
-                                         g_selected_skill)) {
+            if (viewing_history) {
+                if (!tracker().detail_for(viewed_start_wall, sel, g_detail,
+                                          g_selected_skill)) {
                     s.detail_open = false;
                     publish_visible();
                     return;
@@ -101,7 +107,7 @@ void draw_detail_window(int viewed_history_idx) {
                 tracker().detail(sel, g_detail, g_selected_skill);
             }
             dc.agent   = sel;
-            dc.fight   = viewed_history_idx;
+            dc.fight   = viewed_start_wall;
             dc.spike   = g_selected_skill;
             dc.last_ms = now_ms;
         }
@@ -125,10 +131,7 @@ void draw_detail_window(int viewed_history_idx) {
         std::snprintf(title, sizeof(title), "%s - details%s###idps_detail",
                       d.name.c_str(), fight_tag);
 
-    static bool   prev_rel = false;
-    static ImVec2 prev_ds(0.0f, 0.0f);
-    apply_window_pos(s.detail_x, s.detail_y, s.detail_rx, s.detail_ry,
-                     s.pos_relative, prev_rel, prev_ds);
+    apply_window_pos(s.detail_x, s.detail_y);
     ImGui::SetNextWindowSize(ImVec2(s.detail_w, s.detail_h),
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(s.window_alpha);
@@ -143,10 +146,36 @@ void draw_detail_window(int viewed_history_idx) {
         // before ImGui::IsKeyPressed sees it.
         ImVec2 dpos = ImGui::GetWindowPos();
         ImVec2 dsiz = ImGui::GetWindowSize();
-        capture_window_pos(dpos, s.detail_x, s.detail_y,
-                           s.detail_rx, s.detail_ry);
+        capture_window_pos(dpos, s.detail_x, s.detail_y);
         s.detail_w = dsiz.x;
         s.detail_h = dsiz.y;
+
+        // Identity strip: icon, name in profession colour, elite spec, and
+        // subgroup. The title bar carries the name and account already, but
+        // it truncates on a narrow window and drops the spec entirely.
+        {
+            if (uint64_t tex = icon_for(d.prof, d.elite); tex != 0) {
+                align_icon_to_text();
+                ImGui::Image(static_cast<ImTextureID>(tex), ImVec2(16, 16));
+                ImGui::SameLine();
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, prof_color(d.prof));
+            ImGui::TextUnformatted(d.name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            char spec[32];
+            format_spec(spec, sizeof(spec), d.prof, d.elite);
+            ImGui::TextDisabled("%s", spec);
+            if (d.subgroup != 0) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("|");
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, subgroup_color(d.subgroup));
+                ImGui::Text("sub %u", static_cast<unsigned>(d.subgroup));
+                ImGui::PopStyleColor();
+            }
+            ImGui::Separator();
+        }
 
         // Per-sample DPS over a 1-second lookback window. The raw history
         // is sampled every 500ms, so adjacent-pair diffs double-count short
@@ -614,6 +643,10 @@ void draw_detail_window(int viewed_history_idx) {
             ImGui::TableSetupColumn("DPS",    ImGuiTableColumnFlags_WidthFixed, 56.0f);
             ImGui::TableSetupColumn("Hits",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
             ImGui::TableSetupColumn("Crit",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            // Exempt from the show_headers setting. That setting exists to
+            // strip chrome from the always-on overlay; this window is opened
+            // deliberately to read numbers, and seven unlabelled numeric
+            // columns (Damage / Avg / DPS / Hits / Crit) are not guessable.
             ImGui::TableHeadersRow();
 
             int rank = 0;
@@ -647,7 +680,14 @@ void draw_detail_window(int viewed_history_idx) {
                 if (ImGui::Selectable(id_lbl, is_sel,
                                       ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowOverlap)) {
-                    g_selected_skill = is_sel ? 0u : sk.skill_id;
+                    // Selecting a skill drives the spike overlay, which
+                    // needs that skill's per-hit timeline. Stored fights
+                    // drop it (see FightSnapshot), so the overlay can never
+                    // draw for one — leave the control inert rather than
+                    // letting it highlight a row and print a "spike:" label
+                    // for something that will not appear on the graph.
+                    if (!viewing_history)
+                        g_selected_skill = is_sel ? 0u : sk.skill_id;
                 }
                 // Per-hit stats tooltip. All values are already in the
                 // local SkillDetail copy — no tracker lock needed.
