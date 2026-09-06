@@ -26,6 +26,12 @@ load and arcdps downloads + reloads the DLL whenever a newer version exists.
   combat within the gap resumes the same fight; beyond it your row resets
   only on your first action, so NPC aggro or stray AoE never wipes stats;
   fights shorter than the gap skip history unless they scored a down / kill
+- Idle-row reset (toggleable, 10-3600 s, default 120) — a player's counters
+  go to zero once their newest number is that old and they aren't in combat,
+  so the table stops carrying results nobody is reading any more. They keep
+  their place in the list; only the numbers go. Nothing is lost either: the
+  fight reached history long before, and the row fills back in on their next
+  action
 - Fight history — a fight closes and is stored once the squad has been out
   of combat for the fight gap, so WvW skirmishes each get their own entry
   instead of the whole session becoming one. Instanced content also closes
@@ -46,8 +52,8 @@ load and arcdps downloads + reloads the DLL whenever a newer version exists.
   the table read as inconsistent
 - Click a row → detail window: DPS-over-time graph with smoothed / cumulative /
   average / burst overlay layers (toggle each from the legend), crosshair
-  tooltip, and a per-skill breakdown sorted by damage with crit % and
-  per-hit min / avg / max stats on hover
+  tooltip, and a per-skill breakdown sorted by damage with Dmg/Hit and
+  crit % columns, plus per-hit min / avg / max stats on hover
 - Squad totals line (Σ damage, Σ DPS, player count) + right-click →
   "Copy summary" puts the visible table on the clipboard as plain text
 - Cleanses / Strips side windows
@@ -108,6 +114,16 @@ target machine.
   strike opens a fight. Pets / minions / condi ticks extend an active fight
   but cannot cold-start one. Idle >5 s outside an encounter log counts as a
   fight boundary.
+- **Idle rows** — a row keeps its last fight's numbers while out of combat
+  so they stay readable after the pull, but only for `idle_reset_seconds`
+  past the player's last credited action (damage, cleanse, or strip). After
+  that the row reads zero everywhere it appears — tables, squad totals,
+  hover tooltip, detail window — while the player stays in the list. Display
+  only: no tracker state is discarded, so a still-open fight cannot lose a
+  contributor and history is unaffected. In-combat rows never zero out, and
+  a row that has recorded nothing at all has no age to measure and falls
+  back to the 60 s last-event staleness rule. Past fights stay fully
+  readable through the history menu, which never applies the rule.
 - **Damage filter** — strikes with `BLOCK/EVADE/INTERRUPT/ABSORB/BLIND` are
   dropped. Otherwise `ev->value > 0` only. `CBTR_KILLINGBLOW` and
   `CBTR_DOWNED` are exempt from the `> 0` gate — overkill and barrier

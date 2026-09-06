@@ -328,6 +328,16 @@ struct Options {
     // down or kill. Disabled = legacy immediate reset on ENTERCOMBAT.
     std::atomic<bool>     fight_gap_enabled{true};
     std::atomic<uint32_t> fight_gap_ms{5000};
+    // Idle-row reset: a player whose last credited action is older than
+    // idle_reset_ms and who is not in combat reads as a zeroed row — they
+    // keep their place in the list, their numbers do not. Applied by every
+    // live reader (snapshot / detail / top_skills) so the row and its
+    // drill-downs agree; stored-fight readers never apply it. Display only
+    // — the agent's state is untouched, so a still-open fight cannot lose a
+    // contributor and history is unaffected. See idle_expired() in
+    // tracker.cpp for the exact rule.
+    std::atomic<bool>     idle_reset_enabled{true};
+    std::atomic<uint32_t> idle_reset_ms{120000};
 };
 Options& options();
 

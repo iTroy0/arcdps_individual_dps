@@ -163,6 +163,50 @@ namespace {
         return out;
     }
 
+    // True once a row's newest number is older than the idle-reset window
+    // and the player isn't fighting. Every live reader then presents the
+    // agent as a reset row — the person stays in the list, their counters
+    // read zero — so a finished fight stops occupying the table without
+    // anyone disappearing from it.
+    //
+    // Nothing in the tracker is discarded, which is the point: the fight is
+    // already in history (it closed one fight-gap after the last hit, long
+    // before this window elapses), so history readouts are untouched and a
+    // still-open fight cannot lose a contributor. The numbers simply stop
+    // being shown live. In practice the row never comes back holding them
+    // either — the idle window is far longer than the fight gap, so the
+    // player's next action opens a new fight and really does reset the
+    // state.
+    //
+    // Armed rows count as not-fighting on purpose: an armed row has entered
+    // combat but not yet acted, so what it displays is still the PREVIOUS
+    // fight and is judged on that fight's age.
+    bool idle_expired(const AgentState& s, uint64_t now) {
+        if (!options().idle_reset_enabled.load(std::memory_order_relaxed))
+            return false;
+        if (s.in_combat_wall.has_value() && !s.fight_armed) return false;
+        // Never acted: no age to measure. Those rows are left to the
+        // last-event staleness rule in snapshot().
+        if (s.last_activity_wall == 0) return false;
+        uint64_t cut = options().idle_reset_ms.load(std::memory_order_relaxed);
+        return now > s.last_activity_wall && now - s.last_activity_wall > cut;
+    }
+
+    // Identity without numbers — what an idle-expired agent renders as.
+    // Every counter in Snapshot is default-initialised to zero, so copying
+    // the identity fields is the whole job.
+    Snapshot idle_snapshot(const AgentState& s) {
+        Snapshot out;
+        out.id       = s.id;
+        out.name     = s.name;
+        out.account  = s.account;
+        out.prof     = s.prof;
+        out.elite    = s.elite;
+        out.subgroup = s.subgroup;
+        out.is_self  = s.is_self;
+        return out;
+    }
+
     // Damage window for a stored fight: first credited hit to last.
     uint64_t stored_combat_ms(const AgentState& s) {
         if (s.first_damage_wall != 0 && s.last_damage_wall > s.first_damage_wall)
@@ -1352,6 +1396,9 @@ bool Tracker::top_skills(uintptr_t agent_id, int n,
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = agents_.find(agent_id);
     if (it == agents_.end()) return false;
+    // Same rule as the row and the detail window: an idle-expired agent has
+    // no live numbers, so it has no top skills either.
+    if (idle_expired(it->second, wall_now())) return false;
     fill_top_skills(it->second, skill_names_, n, out);
     return !out.empty();
 }
@@ -1437,6 +1484,11 @@ void Tracker::detail(uintptr_t id, AgentDetail& out,
         out.prof  = s.prof;
         out.elite = s.elite;
         out.subgroup = s.subgroup;
+        // The row this window drills into reads zero once it has idled out,
+        // so the graph and skill table must agree — identity only, no
+        // numbers. Past fights are still readable through history, which
+        // never applies the idle rule.
+        if (idle_expired(s, wall_now())) return;
         out.history_start_wall = s.first_damage_wall;
         out.history.assign(s.history.begin(), s.history.end());
         out.skills.reserve(s.skills.size());
@@ -1491,6 +1543,19 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
         constexpr uint64_t kStaleAgentMs = 60000;
         if (!s.is_self && s.last_seen_wall != 0 &&
             now - s.last_seen_wall > kStaleAgentMs) continue;
+        // Armed = old stats on display; render it as the paused row it is,
+        // not as live in-combat numbers.
+        bool in_combat = s.in_combat_wall.has_value() && !s.fight_armed;
+        // Idle-row reset. A row holds its last fight's numbers while out of
+        // combat so they stay readable after the pull, but nothing ever
+        // cleared them: a player who stopped fighting kept a full row until
+        // they fought again or the fight was reset by hand. Once those
+        // numbers age out, the player keeps their place in the list and the
+        // counters go to zero.
+        if (idle_expired(s, now)) {
+            out.push_back(idle_snapshot(s));
+            continue;
+        }
         // Combat time = first->last damage event, extending to now while
         // still in combat. Matches arc's Damage panel denominator.
         uint64_t ms = 0;
@@ -1498,13 +1563,9 @@ void Tracker::snapshot(std::vector<Snapshot>& out) const {
             // An armed row shows the PREVIOUS fight frozen as-is: the
             // window must not extend to "now" or the old fight's DPS
             // would decay while the player stands in combat not acting.
-            uint64_t end = (s.in_combat_wall && !s.fight_armed)
-                         ? now : s.last_damage_wall;
+            uint64_t end = in_combat ? now : s.last_damage_wall;
             if (end > s.first_damage_wall) ms = end - s.first_damage_wall;
         }
-        // Armed = old stats on display; render it as the paused row it is,
-        // not as live in-combat numbers.
-        bool in_combat = s.in_combat_wall.has_value() && !s.fight_armed;
         out.push_back(make_snapshot(s, ms, in_combat));
     }
 }

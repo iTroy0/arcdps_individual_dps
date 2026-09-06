@@ -635,18 +635,20 @@ void draw_detail_window(int viewed_history_idx, uint64_t viewed_start_wall) {
             if (!still_present) g_selected_skill = 0;
         }
 
-        if (ImGui::BeginTable("skills", 7, sk_flags)) {
-            ImGui::TableSetupColumn("#",      ImGuiTableColumnFlags_WidthFixed, 22.0f);
-            ImGui::TableSetupColumn("Skill",  ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Damage", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-            ImGui::TableSetupColumn("%",      ImGuiTableColumnFlags_WidthFixed, 36.0f);
-            ImGui::TableSetupColumn("DPS",    ImGuiTableColumnFlags_WidthFixed, 56.0f);
-            ImGui::TableSetupColumn("Hits",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
-            ImGui::TableSetupColumn("Crit",   ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        if (ImGui::BeginTable("skills", 8, sk_flags)) {
+            ImGui::TableSetupColumn("#",       ImGuiTableColumnFlags_WidthFixed, 22.0f);
+            ImGui::TableSetupColumn("Skill",   ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Damage",  ImGuiTableColumnFlags_WidthFixed, 64.0f);
+            ImGui::TableSetupColumn("%",       ImGuiTableColumnFlags_WidthFixed, 36.0f);
+            ImGui::TableSetupColumn("DPS",     ImGuiTableColumnFlags_WidthFixed, 56.0f);
+            ImGui::TableSetupColumn("Hits",    ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableSetupColumn("Dmg/Hit", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+            ImGui::TableSetupColumn("Crit",    ImGuiTableColumnFlags_WidthFixed, 40.0f);
             // Exempt from the show_headers setting. That setting exists to
             // strip chrome from the always-on overlay; this window is opened
-            // deliberately to read numbers, and seven unlabelled numeric
-            // columns (Damage / Avg / DPS / Hits / Crit) are not guessable.
+            // deliberately to read numbers, and eight unlabelled numeric
+            // columns (Damage / % / DPS / Hits / Dmg/Hit / Crit) are not
+            // guessable.
             ImGui::TableHeadersRow();
 
             int rank = 0;
@@ -744,6 +746,17 @@ void draw_detail_window(int viewed_history_idx, uint64_t viewed_start_wall) {
                 ImGui::TextUnformatted(buf);
                 ImGui::TableNextColumn();
                 ImGui::Text("%u", sk.hits);
+                ImGui::TableNextColumn();
+                // Mean damage per landed hit. Condi ticks count as hits, so
+                // for a condition skill this reads as damage per tick, which
+                // is the number you want when comparing tick strength.
+                // Min / max are on the row tooltip.
+                if (sk.hits > 0) {
+                    format_count(buf, sizeof(buf), sk.damage / sk.hits);
+                    ImGui::TextUnformatted(buf);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
                 ImGui::TableNextColumn();
                 // Crit% over strike hits only — condi ticks can't crit, so
                 // pure condition skills read "-" instead of a fake 0%.

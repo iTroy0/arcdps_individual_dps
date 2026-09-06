@@ -12,6 +12,19 @@ struct Settings {
     // to [1, 60] on load.
     bool  fight_gap_enabled = true;
     int   fight_gap_seconds = 5;
+
+    // Idle-row reset. A row keeps its last fight's numbers while out of
+    // combat — that is what makes them readable after the pull — but with
+    // nothing to clear them, a player who stops fighting sits in the table
+    // with a full row until they fight again or the fight is reset by hand.
+    // Once their last credited action is this old and they are not in
+    // combat, the row's counters read zero. The player keeps their place in
+    // the list; only the numbers go. Nothing is destroyed either: the fight
+    // reached history long before (see fight_gap_seconds), and the row
+    // refills on their next action. Seconds clamped to [10, 3600].
+    bool  idle_reset_enabled = true;
+    int   idle_reset_seconds = 120;
+
     bool  window_open     = true;
     float window_x        = -1.0f;
     float window_y        = -1.0f;
@@ -84,7 +97,10 @@ struct Settings {
     bool  detail_open     = false;
     float detail_x        = -1.0f;
     float detail_y        = -1.0f;
-    float detail_w        = 420.0f;
+    // Wide enough for all eight skill-table columns at their default
+    // widths. Only applies to a fresh install — an existing detail_w in
+    // the ini wins, and the table is resizable either way.
+    float detail_w        = 480.0f;
     float detail_h        = 420.0f;
 
     // Persisted across launches; used by exports.cpp to detect a version

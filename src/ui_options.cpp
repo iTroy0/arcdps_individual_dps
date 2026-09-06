@@ -42,6 +42,35 @@ void draw_filters_section() {
     item_tooltip("Gap length in seconds (1-60). Default 5.");
     ImGui::SameLine();
     ImGui::TextDisabled("s");
+
+    bool idle_en = s.idle_reset_enabled;
+    if (ImGui::Checkbox("Reset idle rows", &idle_en)) {
+        s.idle_reset_enabled = idle_en;
+        options().idle_reset_enabled.store(idle_en, std::memory_order_relaxed);
+    }
+    item_tooltip("Zero a player's counters once their last damage, cleanse "
+                 "or strip is older than this and they are not in combat. "
+                 "They keep their place in the list - only the numbers go. "
+                 "Without it a finished row holds its totals until that "
+                 "player fights again or you reset the fight, so a "
+                 "post-raid or post-skirmish table stays full of results "
+                 "nobody is reading any more. Nothing is lost: the fight is "
+                 "already saved to history, and the row fills back in the "
+                 "moment they act again.");
+    ImGui::SameLine();
+    int idle_sec = s.idle_reset_seconds;
+    ImGui::SetNextItemWidth(90.0f);
+    if (ImGui::InputInt("##idle_reset_sec", &idle_sec, 10, 60)) {
+        if (idle_sec < 10)   idle_sec = 10;
+        if (idle_sec > 3600) idle_sec = 3600;
+        s.idle_reset_seconds = idle_sec;
+        options().idle_reset_ms.store(static_cast<uint32_t>(idle_sec) * 1000u,
+                                      std::memory_order_relaxed);
+    }
+    item_tooltip("How long a row keeps its numbers with no activity, in "
+                 "seconds (10-3600). Default 120.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("s");
     ImGui::Separator();
 
     bool ex_npcs    = options().exclude_npcs.load(std::memory_order_relaxed);
@@ -192,6 +221,8 @@ void reset_to_defaults() {
     s.exclude_gadgets    = def.exclude_gadgets;
     s.fight_gap_enabled  = def.fight_gap_enabled;
     s.fight_gap_seconds  = def.fight_gap_seconds;
+    s.idle_reset_enabled = def.idle_reset_enabled;
+    s.idle_reset_seconds = def.idle_reset_seconds;
     s.sort_mode          = def.sort_mode;
     s.sort_reverse       = def.sort_reverse;
     s.highlight_self     = def.highlight_self;
@@ -220,6 +251,11 @@ void reset_to_defaults() {
                                       std::memory_order_relaxed);
     options().fight_gap_ms.store(
         static_cast<uint32_t>(def.fight_gap_seconds) * 1000u,
+        std::memory_order_relaxed);
+    options().idle_reset_enabled.store(def.idle_reset_enabled,
+                                       std::memory_order_relaxed);
+    options().idle_reset_ms.store(
+        static_cast<uint32_t>(def.idle_reset_seconds) * 1000u,
         std::memory_order_relaxed);
 }
 

@@ -75,6 +75,13 @@ namespace {
             if (sec > 60) sec = 60;
             s.fight_gap_seconds = sec;
         }
+        else if (k == "idle_reset_enabled") s.idle_reset_enabled = std::atoi(v.c_str()) != 0;
+        else if (k == "idle_reset_seconds") {
+            int sec = std::atoi(v.c_str());
+            if (sec < 10)   sec = 10;
+            if (sec > 3600) sec = 3600;
+            s.idle_reset_seconds = sec;
+        }
         else if (k == "window_open") s.window_open = std::atoi(v.c_str()) != 0;
         else if (k == "window_x")    s.window_x = static_cast<float>(std::atof(v.c_str()));
         else if (k == "window_y")    s.window_y = static_cast<float>(std::atof(v.c_str()));
@@ -147,7 +154,7 @@ namespace {
         if (s.detail_y != -1.0f) cx(s.detail_y);
         csz(s.window_w, 380.0f);
         csz(s.window_h, 260.0f);
-        csz(s.detail_w, 420.0f);
+        csz(s.detail_w, 480.0f);
         csz(s.detail_h, 420.0f);
     }
 }
@@ -192,6 +199,8 @@ namespace {
         put("exclude_gadgets=%d\n", s.exclude_gadgets ? 1 : 0);
         put("fight_gap_enabled=%d\n", s.fight_gap_enabled ? 1 : 0);
         put("fight_gap_seconds=%d\n", s.fight_gap_seconds);
+        put("idle_reset_enabled=%d\n", s.idle_reset_enabled ? 1 : 0);
+        put("idle_reset_seconds=%d\n", s.idle_reset_seconds);
         put("window_open=%d\n",     s.window_open     ? 1 : 0);
         put("window_x=%.1f\n",      s.window_x);
         put("window_y=%.1f\n",      s.window_y);

@@ -24,7 +24,7 @@ namespace {
     // Single source of truth for the version string. Bump this one line
     // per release. kVersion is read at runtime (idps::version(), the
     // get_update_url semver compare); kBuild is arc's out_build display.
-    #define IDPS_VERSION "0.9.0"
+    #define IDPS_VERSION "0.9.1"
     constexpr const char* kName    = "individual_dps";
     constexpr const char* kVersion = IDPS_VERSION;
     constexpr const char* kBuild   = IDPS_VERSION " (" __DATE__ " " __TIME__ ")";
@@ -95,6 +95,11 @@ arcdps_exports* mod_init() {
                                       std::memory_order_relaxed);
     options().fight_gap_ms.store(
         static_cast<uint32_t>(s.fight_gap_seconds) * 1000u,
+        std::memory_order_relaxed);
+    options().idle_reset_enabled.store(s.idle_reset_enabled,
+                                       std::memory_order_relaxed);
+    options().idle_reset_ms.store(
+        static_cast<uint32_t>(s.idle_reset_seconds) * 1000u,
         std::memory_order_relaxed);
 
     g_exports.size         = sizeof(arcdps_exports);
